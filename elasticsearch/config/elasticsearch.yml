@@ -1,9 +1,10 @@
 ---
-## Default Elasticsearch configuration from Elasticsearch base image.
-## https://github.com/elastic/elasticsearch/blob/main/distribution/docker/src/docker/config/elasticsearch.yml
-#
-cluster.name: docker-cluster
+cluster.name: nexus-elk
 network.host: 0.0.0.0
 
+# Nexus GCE cluster settings. Security is disabled because this repo does not
+# include transport TLS material for cross-host Elasticsearch nodes.
+xpack.security.enabled: false
+node.store.allow_mmap: false
+
 xpack.license.self_generated.type: trial
-xpack.security.enabled: true
