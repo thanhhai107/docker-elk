@@ -26,7 +26,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create demo_scale with 2 primary shards, 1 replica, and sample documents."
     )
-    parser.add_argument("--es-url", default="http://10.148.0.18:9200")
+    parser.add_argument("--es-url", default="http://127.0.0.1:9200")
     parser.add_argument("--count", type=int, default=10_000)
     parser.add_argument("--reset", action="store_true")
     args = parser.parse_args()

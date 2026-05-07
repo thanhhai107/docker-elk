@@ -17,7 +17,7 @@ services:
       network.publish_host: ${NEXUS_NODE_IP}
       transport.publish_host: ${NEXUS_NODE_IP}
       http.publish_host: ${NEXUS_NODE_IP}
-      discovery.seed_hosts: 10.148.0.18,10.148.0.16,10.148.0.17,10.148.0.19,10.148.0.20
+      discovery.seed_hosts: nexus-master-1,nexus-worker-1,nexus-worker-2,nexus-worker-3,nexus-worker-4
       cluster.initial_master_nodes: nexus-master-1
       ES_JAVA_OPTS: "${ES_JAVA_OPTS:--Xms4g -Xmx4g}"
     networks:

@@ -6,11 +6,11 @@ Elastic `8.17.0`.
 
 | VM | Private IP | Public IP | Services |
 | --- | --- | --- | --- |
-| `nexus-master-1` | `10.148.0.18` | `34.126.85.104` | Elasticsearch master, PostgreSQL, Kibana |
-| `nexus-worker-1` | `10.148.0.16` | none | Elasticsearch data/ingest |
-| `nexus-worker-2` | `10.148.0.17` | none | Elasticsearch data/ingest |
-| `nexus-worker-3` | `10.148.0.19` | none | Elasticsearch data/ingest |
-| `nexus-worker-4` | `10.148.0.20` | none | Elasticsearch data/ingest |
+| `nexus-master-1` | current Terraform private IP | `34.126.85.104` | Elasticsearch master, PostgreSQL, Kibana |
+| `nexus-worker-1` | current Terraform private IP | none | Elasticsearch data/ingest |
+| `nexus-worker-2` | current Terraform private IP | none | Elasticsearch data/ingest |
+| `nexus-worker-3` | current Terraform private IP | none | Elasticsearch data/ingest |
+| `nexus-worker-4` | current Terraform private IP | none | Elasticsearch data/ingest |
 
 Primary demo interface:
 
@@ -123,8 +123,8 @@ The Nexus Terraform firewall includes TCP `5601` for Kibana on the master.
 Run on the master:
 
 ```sh
-curl http://10.148.0.18:9200/_cluster/health?pretty
-curl "http://10.148.0.18:9200/_cat/nodes?v&h=name,node.role,master,ip"
+curl http://127.0.0.1:9200/_cluster/health?pretty
+curl "http://127.0.0.1:9200/_cat/nodes?v&h=name,node.role,master,ip"
 ```
 
 Expected Elasticsearch nodes:
