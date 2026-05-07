@@ -7,7 +7,13 @@ Use this file for the talk track and use
 
 ## Prepare
 
-Start the Nexus cluster and master services:
+Start Elasticsearch on the worker VMs first:
+
+```sh
+docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d elasticsearch
+```
+
+Then start the master services on `nexus-master-1`:
 
 ```sh
 docker compose --env-file .env --env-file /etc/nexus-elastic.env --profile master up -d

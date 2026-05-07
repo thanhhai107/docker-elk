@@ -20,24 +20,25 @@ Primary demo interface:
 
 Security is disabled in Elasticsearch because this repo does not include
 transport TLS material for cross-host nodes. Keep `9200`, `9300`, and
-PostgreSQL private to the VPC or trusted sources.
+PostgreSQL private to the VPC or trusted sources. PostgreSQL is bound to
+`127.0.0.1:5432` on the master so the ingest notebook can connect from the VM
+host without exposing it externally.
 
 ## Prepare VMs
 
 The Terraform state shows the VMs as `TERMINATED`; start them in GCP first.
 
-If `nexus/infra` is configured with `shopx_autostart = true`, the VM startup
-script clones this repo into `/opt/nexus/docker-elk` and starts the
-`shopx-docker-elk.service` systemd unit automatically. In that mode, you only
-need to boot the VMs and check service status.
-
-Copy this repo to every VM, for example:
+With the current `nexus/infra` bootstrap, this repo is cloned or fast-forwarded
+on every VM during startup:
 
 ```sh
 /opt/nexus/docker-elk
 ```
 
-Then run on every VM:
+The bootstrap does not run Docker Compose automatically. SSH into the VM and
+run the stack manually when needed.
+
+Verify on every VM:
 
 ```sh
 sudo mkdir -p /data/elasticsearch
@@ -63,8 +64,6 @@ The notebook ingest requires the Amazon metadata file to exist.
 
 ## Start Workers
 
-Skip this section when `shopx_autostart = true`.
-
 Run the same command on each worker. The node name, private IP, and
 Elasticsearch roles are read from `/etc/nexus-elastic.env`, which is generated
 by `nexus/infra` during VM startup.
@@ -74,8 +73,6 @@ docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d elasticse
 ```
 
 ## Start Master
-
-Skip this section when `shopx_autostart = true`.
 
 Run on `nexus-master-1`:
 
@@ -119,8 +116,7 @@ Kibana listens on:
 http://34.126.85.104:5601
 ```
 
-Add a firewall rule for TCP `5601` targeting `nexus-master` only if you need
-public Kibana access.
+The Nexus Terraform firewall includes TCP `5601` for Kibana on the master.
 
 ## Verify
 
