@@ -1,9 +1,8 @@
 # ShopX Product Search & Discovery demo
 # Paste this file into Kibana Dev Tools.
 #
-# Before running semantic queries, generate query vectors on nexus-master-1:
-#   python scripts/generate_query_vector.py "headphones for working out"
-#   python scripts/generate_query_vector.py "tai nghe chong on"
+# Before running semantic queries, generate a query vector on nexus-master-1:
+#   python scripts/generate_query_vector.py "<query text>"
 #
 # For Act 3 scalability data:
 #   python scripts/create_demo_scale.py --reset --count 10000
@@ -18,7 +17,7 @@ GET /_cat/nodes?v&h=name,ip,node.role,master,heap.percent,ram.percent,cpu,load_1
 GET /_cat/indices/shopx_*?v
 
 
-### Act 2A.1 - Fuzzy search fixes typo: "samsug galxy s24"
+### Act 2A.1 - Fuzzy search fixes typo
 
 GET /shopx_products/_search
 {
@@ -26,7 +25,7 @@ GET /shopx_products/_search
   "_source": ["product_id", "title", "brand", "price", "rating", "review_count"],
   "query": {
     "multi_match": {
-      "query": "samsug galxy s24",
+      "query": "<typo query>",
       "fields": ["title^4", "brand.text^2", "category.text^2", "description"],
       "fuzziness": "AUTO",
       "prefix_length": 1
@@ -35,7 +34,7 @@ GET /shopx_products/_search
 }
 
 
-### Act 2A.2 - Search-as-you-type: i -> ip -> iph
+### Act 2A.2 - Search-as-you-type
 
 GET /shopx_products/_search
 {
@@ -43,7 +42,7 @@ GET /shopx_products/_search
   "_source": ["product_id", "title", "brand", "price", "rating"],
   "query": {
     "multi_match": {
-      "query": "iph",
+      "query": "<prefix query>",
       "type": "bool_prefix",
       "fields": [
         "title_suggest",
@@ -55,7 +54,7 @@ GET /shopx_products/_search
 }
 
 
-### Act 2A.3 - Relevance scoring: bluetooth speaker quality ranking
+### Act 2A.3 - Relevance scoring
 
 GET /shopx_products/_search
 {
@@ -65,7 +64,7 @@ GET /shopx_products/_search
     "function_score": {
       "query": {
         "multi_match": {
-          "query": "bluetooth speaker",
+          "query": "<search query>",
           "fields": ["title^4", "brand.text^2", "category.text^2", "description"]
         }
       },
@@ -104,7 +103,7 @@ GET /shopx_products/_search
       "must": [
         {
           "multi_match": {
-            "query": "headphones",
+            "query": "<search query>",
             "fields": ["title^4", "brand.text^2", "category.text^2", "description"]
           }
         }
@@ -146,7 +145,7 @@ GET /shopx_products/_search
           "should": [
             {
               "multi_match": {
-                "query": "samsug galxy",
+                "query": "<search query>",
                 "fields": ["title^4", "brand.text^2", "category.text^2", "description"],
                 "fuzziness": "AUTO",
                 "prefix_length": 1
@@ -154,7 +153,7 @@ GET /shopx_products/_search
             },
             {
               "multi_match": {
-                "query": "samsug galxy",
+                "query": "<search query>",
                 "type": "bool_prefix",
                 "fields": ["title_suggest", "title_suggest._2gram", "title_suggest._3gram"]
               }
@@ -178,7 +177,7 @@ GET /shopx_products/_search
 }
 
 
-### Act 2B.1 - Synonym graph: ANC headphones
+### Act 2B.1 - Synonym graph
 
 GET /shopx_products/_search
 {
@@ -186,7 +185,7 @@ GET /shopx_products/_search
   "_source": ["product_id", "title", "brand", "price", "rating", "review_count"],
   "query": {
     "multi_match": {
-      "query": "ANC headphones",
+      "query": "<synonym query>",
       "fields": ["title^4", "brand.text^2", "category.text^2", "description"]
     }
   }
@@ -195,7 +194,7 @@ GET /shopx_products/_search
 
 ### Act 2B.2 - Semantic vector search
 # Replace PASTE_VECTOR_HERE with output from:
-# python scripts/generate_query_vector.py "headphones for working out"
+# python scripts/generate_query_vector.py "<semantic query>"
 
 GET /shopx_products/_search
 {
@@ -203,7 +202,7 @@ GET /shopx_products/_search
   "_source": ["product_id", "title", "brand", "price", "rating", "review_count"],
   "query": {
     "multi_match": {
-      "query": "headphones for working out",
+      "query": "<semantic query>",
       "fields": ["title^4", "brand.text^2", "category.text^2", "description"]
     }
   },
@@ -214,7 +213,7 @@ GET /shopx_products/_search
     "num_candidates": 100,
     "boost": 5,
     "filter": {
-      "terms": { "semantic_terms": ["headphones", "sport"] }
+      "terms": { "semantic_terms": ["<semantic term>", "<semantic term>"] }
     }
   }
 }
@@ -230,7 +229,7 @@ GET /shopx_products/_search
   "query": {
     "script_score": {
       "query": {
-        "terms": { "semantic_terms": ["headphones", "sport"] }
+        "terms": { "semantic_terms": ["<semantic term>", "<semantic term>"] }
       },
       "script": {
         "source": "Math.max(cosineSimilarity(params.query_vector, 'embedding'), 0) * 5",
@@ -245,7 +244,7 @@ GET /shopx_products/_search
 
 ### Act 2B.2 extra - Cross-language semantic search
 # Replace PASTE_VECTOR_HERE with output from:
-# python scripts/generate_query_vector.py "tai nghe chong on"
+# python scripts/generate_query_vector.py "<cross-language query>"
 
 GET /shopx_products/_search
 {
@@ -253,7 +252,7 @@ GET /shopx_products/_search
   "_source": ["product_id", "title", "brand", "price", "rating", "review_count"],
   "query": {
     "multi_match": {
-      "query": "tai nghe chong on",
+      "query": "<cross-language query>",
       "fields": ["title^4", "brand.text^2", "category.text^2", "description"]
     }
   },
@@ -264,7 +263,7 @@ GET /shopx_products/_search
     "num_candidates": 100,
     "boost": 5,
     "filter": {
-      "terms": { "semantic_terms": ["headphones", "noise_cancel"] }
+      "terms": { "semantic_terms": ["<semantic term>", "<semantic term>"] }
     }
   }
 }
@@ -279,7 +278,7 @@ GET /shopx_products/_search
   "query": {
     "script_score": {
       "query": {
-        "terms": { "semantic_terms": ["headphones", "noise_cancel"] }
+        "terms": { "semantic_terms": ["<semantic term>", "<semantic term>"] }
       },
       "script": {
         "source": "Math.max(cosineSimilarity(params.query_vector, 'embedding'), 0) * 5",
@@ -302,7 +301,7 @@ GET /shopx_products/_search
     "function_score": {
       "query": {
         "multi_match": {
-          "query": "wireless headphones",
+          "query": "<personalized query>",
           "fields": ["title^4", "brand.text^2", "category.text^2", "description"]
         }
       },
@@ -329,7 +328,7 @@ GET /shopx_products/_search
     "function_score": {
       "query": {
         "multi_match": {
-          "query": "wireless headphones",
+          "query": "<personalized query>",
           "fields": ["title^4", "brand.text^2", "category.text^2", "description"]
         }
       },
@@ -349,7 +348,7 @@ GET /shopx_products/_search
 
 POST /shopx_logs/_doc
 {
-  "query": "zzzxqv quasar banana snorkel",
+  "query": "<zero-result query>",
   "user_id": "anonymous",
   "engine": "elasticsearch",
   "result_count": 0,

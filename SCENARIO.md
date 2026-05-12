@@ -58,8 +58,8 @@ data/baseline_postgres.sql
 ```sql
 SELECT product_id, title, brand, price, rating, review_count
 FROM products
-WHERE title ILIKE '%noise cancelling headphones%'
-   OR description ILIKE '%noise cancelling headphones%'
+WHERE title ILIKE '%<expanded phrase>%'
+   OR description ILIKE '%<expanded phrase>%'
 ORDER BY product_id
 LIMIT 5;
 ```
@@ -67,35 +67,36 @@ LIMIT 5;
 ```sql
 SELECT product_id, title, brand, price, rating, review_count
 FROM products
-WHERE title ILIKE '%ANC headphones%'
-   OR description ILIKE '%ANC headphones%'
+WHERE title ILIKE '%<synonym phrase>%'
+   OR description ILIKE '%<synonym phrase>%'
 ORDER BY product_id
 LIMIT 5;
 ```
 
-Expected point: PostgreSQL does not know `ANC` means `active noise cancellation`.
+Expected point: PostgreSQL does not know a domain synonym means its expanded
+phrase unless that logic is built separately.
 
 ### 1.2 Semantic Failure
 
 ```sql
 SELECT product_id, title, brand, price, rating, review_count
 FROM products
-WHERE title ILIKE '%headphones for working out%'
-   OR description ILIKE '%headphones for working out%'
+WHERE title ILIKE '%<intent query>%'
+   OR description ILIKE '%<intent query>%'
 ORDER BY product_id
 LIMIT 5;
 ```
 
-Expected point: PostgreSQL matches characters, not intent. It misses sport,
-gym, running, and athletic products.
+Expected point: PostgreSQL matches characters, not intent. It misses products
+whose wording differs from the user's intent.
 
 ### 1.3 Ranking Failure
 
 ```sql
 SELECT product_id, title, brand, price, rating, review_count
 FROM products
-WHERE title ILIKE '%bluetooth speaker%'
-   OR description ILIKE '%bluetooth speaker%'
+WHERE title ILIKE '%<ranking query>%'
+   OR description ILIKE '%<ranking query>%'
 ORDER BY product_id
 LIMIT 5;
 ```
@@ -107,8 +108,8 @@ Expected point: matching products can be returned in a non-business ranking.
 ```sql
 SELECT product_id, title, brand, price, rating, review_count
 FROM products
-WHERE title ILIKE '%samsug galxy s24%'
-   OR description ILIKE '%samsug galxy s24%'
+WHERE title ILIKE '%<typo query>%'
+   OR description ILIKE '%<typo query>%'
 ORDER BY product_id
 LIMIT 5;
 ```
@@ -153,8 +154,8 @@ Run:
 For semantic sections, generate the query vector first:
 
 ```sh
-python scripts/generate_query_vector.py "headphones for working out"
-python scripts/generate_query_vector.py "tai nghe chong on"
+python scripts/generate_query_vector.py "<semantic query>"
+python scripts/generate_query_vector.py "<cross-language query>"
 ```
 
 Paste the generated vector into `PASTE_VECTOR_HERE` in Dev Tools.

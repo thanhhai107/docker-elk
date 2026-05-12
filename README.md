@@ -100,8 +100,7 @@ dimensions.
 Generate query vectors for Kibana semantic search:
 
 ```sh
-python scripts/generate_query_vector.py "headphones for working out"
-python scripts/generate_query_vector.py "tai nghe chong on"
+python scripts/generate_query_vector.py "<query text>"
 ```
 
 Create scalability demo data:
