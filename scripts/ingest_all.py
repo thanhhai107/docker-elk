@@ -118,7 +118,11 @@ def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]
     with psycopg.connect(settings.postgres_dsn) as conn:
         if reset:
             conn.execute("TRUNCATE TABLE reviews, products RESTART IDENTITY")
-        conn.executemany(product_sql, [[product.get(column) for column in PRODUCT_COLUMNS] for product in products])
+        with conn.cursor() as cur:
+            cur.executemany(
+                product_sql,
+                [[product.get(column) for column in PRODUCT_COLUMNS] for product in products],
+            )
         known_products = {product["product_id"] for product in products}
         review_rows = [
             [review.get(column) for column in REVIEW_COLUMNS]
@@ -126,7 +130,8 @@ def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]
             if review["product_id"] in known_products
         ]
         if review_rows:
-            conn.executemany(review_sql, review_rows)
+            with conn.cursor() as cur:
+                cur.executemany(review_sql, review_rows)
 
 
 def ingest_elasticsearch(products: list[dict[str, Any]], reset: bool) -> None:
