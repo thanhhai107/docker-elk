@@ -15,21 +15,12 @@ ENGINE_LABELS = {
     "postgres": "PostgreSQL FTS",
 }
 SCENARIO_TABS = [
-    ("advanced-ranking", "Advanced Ranking"),
-    ("search-filter-facet", "Search + Filter + Facet"),
-    ("negative-review-analytics", "Negative Review Analytics"),
-    ("complex-query-intent", "Complex Query Intent"),
-    ("admin-dashboard-insights", "Admin Dashboard Insights"),
+    ("advanced-ranking", "Scenario 1: Advanced Product Search with Business Ranking"),
+    ("search-filter-facet", "Scenario 2: Search + Filter + Faceted Search"),
+    ("negative-review-analytics", "Scenario 3: Negative Review Analytics"),
+    ("complex-query-intent", "Scenario 4: Complex Query Intent"),
+    ("admin-dashboard-insights", "Scenario 5: Admin Dashboard Insights"),
 ]
-FINAL_CONCLUSION = """
-Qua các scenario thực tế với Amazon Electronics Dataset, Elasticsearch outperform Meilisearch và PostgreSQL Full-Text Search ở các workflow phức tạp.
-
-Meilisearch rất phù hợp cho search UI đơn giản, tốc độ nhanh và typo tolerance tốt.
-
-PostgreSQL Full-Text Search phù hợp nếu dữ liệu đã nằm trong database và bài toán search không quá phức tạp.
-
-Tuy nhiên, khi hệ thống cần search nhiều field, ranking theo business logic, filter phức tạp, highlight, faceted search, aggregation và review analytics, Elasticsearch là lựa chọn mạnh hơn.
-"""
 
 
 def get_json(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -168,8 +159,6 @@ def render_benchmark(limit: int) -> None:
             ]
             st.dataframe(engine_rows, use_container_width=True, hide_index=True)
 
-    st.markdown(FINAL_CONCLUSION)
-
 
 def describe_engine(engine: dict[str, Any]) -> str:
     if not engine:
@@ -193,7 +182,7 @@ with st.sidebar:
     selected_query = st.selectbox("Query", query_options)
     limit = st.slider("Results per engine", 3, 20, 10)
 
-tabs = st.tabs([label for _, label in SCENARIO_TABS] + ["Workflow Benchmark"])
+tabs = st.tabs([label for _, label in SCENARIO_TABS] + ["Scenario 6: End-to-End Workflow Benchmark"])
 
 for tab, (scenario_id, _label) in zip(tabs, SCENARIO_TABS):
     with tab:

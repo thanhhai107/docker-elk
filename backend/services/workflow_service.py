@@ -27,27 +27,27 @@ QUERY_OPTIONS = [
 
 SCENARIOS: dict[str, dict[str, Any]] = {
     "advanced-ranking": {
-        "title": "Advanced Ranking",
+        "title": "Scenario 1: Advanced Product Search with Business Ranking",
         "default_query": "wireless noise cancelling headphones",
         "summary": "Multi-field search with business ranking from rating and review volume.",
     },
     "search-filter-facet": {
-        "title": "Search + Filter + Facet",
+        "title": "Scenario 2: Search + Filter + Faceted Search",
         "default_query": "gaming mouse",
         "summary": "Search result page with filters, facets, price ranges and rating analytics.",
     },
     "negative-review-analytics": {
-        "title": "Negative Review Analytics",
+        "title": "Scenario 3: Negative Review Analytics",
         "default_query": "battery problem",
         "summary": "Admin workflow for finding verified low-rating reviews and problem products.",
     },
     "complex-query-intent": {
-        "title": "Complex Query Intent",
+        "title": "Scenario 4: Complex Query Intent",
         "default_query": "portable monitor usb c",
         "summary": "Must, should, filter and exclusion logic for a realistic buyer intent.",
     },
     "admin-dashboard-insights": {
-        "title": "Admin Dashboard Insights",
+        "title": "Scenario 5: Admin Dashboard Insights",
         "default_query": "mechanical keyboard",
         "summary": "One search term producing result hits, highlights and market analytics.",
     },
