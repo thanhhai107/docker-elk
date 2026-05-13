@@ -52,6 +52,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reviews", type=Path, default=None, help="Review JSONL/GZ path.")
     parser.add_argument("--product-limit", type=int, default=5000)
     parser.add_argument("--review-limit", type=int, default=20000)
+    parser.add_argument(
+        "--engine",
+        choices=["all", "elasticsearch", "meilisearch", "postgres"],
+        default="all",
+        help="Choose one engine to ingest, or all engines.",
+    )
     parser.add_argument("--reset", action="store_true")
     return parser.parse_args()
 
@@ -184,8 +190,10 @@ def ingest_meilisearch(products: list[dict[str, Any]], reset: bool) -> None:
         wait_task(client, client.create_index("amazon_electronics_products", {"primaryKey": "product_id"}))
         wait_task(client, client.create_index("amazon_electronics_reviews", {"primaryKey": "review_id"}))
     create_indexes()
-    task = client.index("amazon_electronics_products").add_documents(products, primary_key="product_id")
-    wait_task(client, task)
+    products_index = client.index("amazon_electronics_products")
+    for chunk in chunks(products, 1000):
+        task = products_index.add_documents(chunk, primary_key="product_id")
+        wait_task(client, task)
 
 
 def ingest_meilisearch_reviews(reviews: list[dict[str, Any]], known_products: set[str]) -> None:
@@ -193,8 +201,15 @@ def ingest_meilisearch_reviews(reviews: list[dict[str, Any]], known_products: se
     review_docs = [review for review in reviews if review["product_id"] in known_products]
     if not review_docs:
         return
-    task = client.index("amazon_electronics_reviews").add_documents(review_docs, primary_key="review_id")
-    wait_task(client, task)
+    reviews_index = client.index("amazon_electronics_reviews")
+    for chunk in chunks(review_docs, 1000):
+        task = reviews_index.add_documents(chunk, primary_key="review_id")
+        wait_task(client, task)
+
+
+def chunks(items: list[dict[str, Any]], size: int):
+    for index in range(0, len(items), size):
+        yield items[index : index + size]
 
 
 def task_uid(task: Any) -> int:
@@ -204,7 +219,11 @@ def task_uid(task: Any) -> int:
 
 
 def wait_task(client: meilisearch.Client, task: Any) -> None:
-    client.wait_for_task(task_uid(task), timeout_in_ms=120000)
+    completed = client.wait_for_task(task_uid(task), timeout_in_ms=120000)
+    status = getattr(completed, "status", None) or completed.get("status")
+    if status == "failed":
+        error = getattr(completed, "error", None) or completed.get("error")
+        raise RuntimeError(f"Meilisearch task failed: {error}")
 
 
 def main() -> int:
@@ -234,11 +253,24 @@ def main() -> int:
     enriched_reviews = enrich_reviews(reviews, products)
 
     print(f"Loaded {len(products)} products and {len(reviews)} reviews")
-    ingest_postgres(products, reviews, args.reset)
-    ingest_elasticsearch(products, args.reset)
-    ingest_elasticsearch_reviews(enriched_reviews, known_products)
-    ingest_meilisearch(products, args.reset)
-    ingest_meilisearch_reviews(enriched_reviews, known_products)
+    print(f"Engine: {args.engine}")
+
+    if args.engine in {"all", "postgres"}:
+        print("Ingesting PostgreSQL...")
+        ingest_postgres(products, reviews, args.reset)
+
+    if args.engine in {"all", "elasticsearch"}:
+        print("Ingesting Elasticsearch products...")
+        ingest_elasticsearch(products, args.reset)
+        print("Ingesting Elasticsearch reviews...")
+        ingest_elasticsearch_reviews(enriched_reviews, known_products)
+
+    if args.engine in {"all", "meilisearch"}:
+        print("Ingesting Meilisearch products...")
+        ingest_meilisearch(products, args.reset)
+        print("Ingesting Meilisearch reviews...")
+        ingest_meilisearch_reviews(enriched_reviews, known_products)
+
     print("Ingest complete")
     return 0
 
