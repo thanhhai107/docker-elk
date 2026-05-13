@@ -3,7 +3,10 @@ __pycache__/
 .ipynb_checkpoints/
 .cache/
 
+.env
+.env.local
+
 data/raw/*.jsonl
 data/raw/*.jsonl.gz
-
-.env.local
+data/products.jsonl
+data/reviews.jsonl

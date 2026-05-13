@@ -1,0 +1,7 @@
+elasticsearch>=8.15,<9
+fastapi>=0.115,<1
+meilisearch>=0.31,<1
+psycopg[binary]>=3.2,<4
+pydantic>=2.9,<3
+python-dotenv>=1,<2
+uvicorn[standard]>=0.30,<1

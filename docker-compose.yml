@@ -1,67 +1,83 @@
 services:
-
-  elasticsearch:
-    build:
-      context: elasticsearch/
-      args:
-        ELASTIC_VERSION: ${ELASTIC_VERSION}
-    volumes:
-      - ./elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro,Z
-      - /data/elasticsearch:/usr/share/elasticsearch/data:Z
-    ports:
-      - 9200:9200
-      - 9300:9300
-    environment:
-      node.name: ${NEXUS_NODE_NAME}
-      node.roles: ${NEXUS_NODE_ROLES}
-      network.publish_host: ${NEXUS_NODE_IP}
-      transport.publish_host: ${NEXUS_NODE_IP}
-      http.publish_host: ${NEXUS_NODE_IP}
-      discovery.seed_hosts: nexus-master-1,nexus-worker-1,nexus-worker-2,nexus-worker-3,nexus-worker-4
-      cluster.initial_master_nodes: nexus-master-1
-      ES_JAVA_OPTS: "${ES_JAVA_OPTS:--Xms4g -Xmx4g}"
-    networks:
-      - elk
-    restart: unless-stopped
-
   postgres:
-    profiles:
-      - master
     image: postgres:16-bookworm
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-amazon_search}
+      POSTGRES_USER: ${POSTGRES_USER:-search}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-search_demo}
     ports:
-      - 127.0.0.1:5432:5432
+      - "5432:5432"
     volumes:
-      - /data/postgres:/var/lib/postgresql/data:Z
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init_postgres.sql:ro
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-search} -d ${POSTGRES_DB:-amazon_search}"]
       interval: 10s
       timeout: 5s
       retries: 10
-    networks:
-      - elk
-    restart: unless-stopped
 
-  kibana:
-    profiles:
-      - master
-    build:
-      context: kibana/
-      args:
-        ELASTIC_VERSION: ${ELASTIC_VERSION}
-    volumes:
-      - ./kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml:ro,Z
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.17.0}
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: ${ES_JAVA_OPTS:--Xms1g -Xmx1g}
     ports:
-      - 5601:5601
-    networks:
-      - elk
-    depends_on:
-      - elasticsearch
-    restart: unless-stopped
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
-networks:
-  elk:
-    driver: bridge
+  meilisearch:
+    image: getmeili/meilisearch:v1.13
+    environment:
+      MEILI_ENV: development
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-masterKey}
+    ports:
+      - "7700:7700"
+    volumes:
+      - meilisearch-data:/meili_data
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-masterKey}
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-search}:${POSTGRES_PASSWORD:-search_demo}@postgres:5432/${POSTGRES_DB:-amazon_search}
+      DATA_DIR: /app/data
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      meilisearch:
+        condition: service_started
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:
+  elasticsearch-data:
+  meilisearch-data:

@@ -1,4 +1,0 @@
-elasticsearch>=8.15,<10
-psycopg[binary]>=3.2,<4
-sentence-transformers>=3.3,<4
-tqdm>=4.66,<5

@@ -1,157 +1,156 @@
-# Nexus ShopX Search Demo
+# Amazon Electronics Search Demo
 
-This repo is configured only for the Nexus GCE VM cluster and the Product
-Search & Discovery scenario. Elasticsearch/Kibana are pinned to
-Elastic `8.17.0`.
+Demo nay so sanh 3 cong nghe tim kiem tren bai toan product search giong
+Amazon mini:
 
-| VM | Private IP | Public IP | Services |
-| --- | --- | --- | --- |
-| `nexus-master-1` | current Terraform private IP | `34.126.85.104` | Elasticsearch master, PostgreSQL, Kibana |
-| `nexus-worker-1` | current Terraform private IP | none | Elasticsearch data/ingest |
-| `nexus-worker-2` | current Terraform private IP | none | Elasticsearch data/ingest |
-| `nexus-worker-3` | current Terraform private IP | none | Elasticsearch data/ingest |
-| `nexus-worker-4` | current Terraform private IP | none | Elasticsearch data/ingest |
+- Elasticsearch
+- Meilisearch
+- PostgreSQL Full-Text Search
 
-Primary demo interface:
+Ung dung dung FastAPI cho backend, Streamlit cho giao dien demo, Docker Compose
+cho Elasticsearch, Meilisearch va PostgreSQL. Dataset dau vao la Amazon
+Electronics metadata va review JSONL/GZ.
 
-- Kibana Dev Tools: run Elasticsearch DSL scenarios
-- Kibana dashboards: inspect analytics and zero-result logs
-- Notebook ingest: load Amazon Electronics metadata and create SBERT embeddings
+## Chuc Nang Demo
 
-Security is disabled in Elasticsearch because this repo does not include
-transport TLS material for cross-host nodes. Keep `9200`, `9300`, and
-PostgreSQL private to the VPC or trusted sources. PostgreSQL is bound to
-`127.0.0.1:5432` on the master so the ingest notebook can connect from the VM
-host without exposing it externally.
+- Full-text search tren title, description va review text
+- Typo tolerant / fuzzy search
+- Filter theo brand, category, price, rating
+- Faceted search / aggregation theo brand va category
+- Highlight tu khoa trong ket qua
+- Review analytics tu review events
+- So sanh latency cua Elasticsearch, Meilisearch va PostgreSQL
+- So sanh do phu hop bang danh sach ket qua cua tung engine
 
-## Prepare VMs
+## Cau Truc
 
-The Terraform state shows the VMs as `TERMINATED`; start them in GCP first.
-
-With the current `nexus/infra` bootstrap, this repo is cloned or fast-forwarded
-on every VM during startup:
-
-```sh
-/opt/nexus/docker-elk
+```text
+.
+├── docker-compose.yml
+├── data/
+│   ├── download_datasets.py
+│   ├── products.jsonl              # optional local input, ignored by Git
+│   ├── reviews.jsonl               # optional local input, ignored by Git
+│   ├── raw/                        # downloaded Amazon files, ignored by Git
+│   └── sample/                     # small demo dataset
+├── backend/
+│   ├── main.py
+│   ├── config.py
+│   ├── ingest/
+│   ├── services/
+│   ├── models/
+│   └── utils/
+├── frontend/
+│   └── app.py
+└── scripts/
+    ├── init_postgres.sql
+    ├── create_elasticsearch_indices.py
+    ├── create_meilisearch_indexes.py
+    └── ingest_all.py
 ```
 
-The bootstrap does not run Docker Compose automatically. SSH into the VM and
-run the stack manually when needed.
-
-Verify on every VM:
+## Chay Nhanh Bang Sample Data
 
 ```sh
-sudo mkdir -p /data/elasticsearch
-sudo chown -R 1000:1000 /data/elasticsearch
-cd /opt/nexus/docker-elk
-cat /etc/nexus-elastic.env
+cp .env.example .env
+docker compose up -d --build
+docker compose exec backend python scripts/ingest_all.py --reset
 ```
 
-Run only on `nexus-master-1`:
+Neu truoc do da chay repo voi PostgreSQL credentials cu, reset volume truoc:
 
 ```sh
-sudo mkdir -p /data/postgres
-sudo chown -R 999:999 /data/postgres
+docker compose down -v
 ```
 
-Optional full dataset path:
+Mo giao dien:
+
+```text
+http://localhost:8501
+```
+
+API backend:
+
+```text
+http://localhost:8000/docs
+```
+
+## Dung Amazon Electronics Dataset
+
+Tai metadata san pham:
+
+```sh
+python data/download_datasets.py
+```
+
+Tai them review events:
+
+```sh
+python data/download_datasets.py --reviews
+```
+
+Script se luu file vao:
 
 ```text
 data/raw/meta_Electronics.jsonl.gz
+data/raw/Electronics.jsonl.gz
 ```
 
-The notebook ingest requires the Amazon metadata file to exist.
-
-## Start Workers
-
-Run the same command on each worker. The node name, private IP, and
-Elasticsearch roles are read from `/etc/nexus-elastic.env`, which is generated
-by `nexus/infra` during VM startup.
+Ingest vao ca 3 engine:
 
 ```sh
-docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d elasticsearch
+docker compose exec backend python scripts/ingest_all.py --reset --product-limit 5000 --review-limit 20000
 ```
 
-## Start Master
-
-Run on `nexus-master-1`:
+Tang limit neu may du RAM va thoi gian ingest:
 
 ```sh
-docker compose --env-file .env --env-file /etc/nexus-elastic.env --profile master up -d
+docker compose exec backend python scripts/ingest_all.py --reset --product-limit 80000 --review-limit 200000
 ```
 
-For the new Kibana-first demo, ingest with the notebook:
+## Endpoint Chinh
 
-```text
-data/ingest_amazon_electronics.ipynb
-```
-
-Install notebook dependencies if needed:
+So sanh 3 engine:
 
 ```sh
-pip install -r data/requirements.txt
+curl "http://localhost:8000/compare?q=wireless%20noise%20cancelling%20headphones&min_rating=4&max_price=500"
 ```
 
-The notebook loads `data/raw/meta_Electronics.jsonl.gz` into both PostgreSQL
-and Elasticsearch, then embeds products with
-`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` using 384
-dimensions.
-
-Generate query vectors for Kibana semantic search:
+Tim tren tung engine:
 
 ```sh
-python scripts/generate_query_vector.py "<query text>"
+curl "http://localhost:8000/search/elasticsearch?q=bluetooth%20speaker"
+curl "http://localhost:8000/search/meilisearch?q=bluetooth%20speaker"
+curl "http://localhost:8000/search/postgres?q=bluetooth%20speaker"
 ```
 
-Create scalability demo data:
+Review analytics:
 
 ```sh
-python scripts/create_demo_scale.py --reset --count 10000
+curl "http://localhost:8000/analytics/reviews"
 ```
 
-Kibana listens on:
+## Vai Tro Tung Engine
 
-```text
-http://34.126.85.104:5601
-```
+Elasticsearch:
 
-The Nexus Terraform firewall includes TCP `5601` for Kibana on the master.
+- Fuzzy search bang `multi_match` voi `fuzziness: AUTO`
+- Synonym analyzer cho cac cum nhu `anc`, `noise cancelling`, `headphones`
+- Highlight va aggregation manh
 
-## Verify
+Meilisearch:
 
-Run on the master:
+- Typo tolerance mac dinh, phu hop demo search UX nhanh
+- Facet/filter don gian theo brand, category, price, rating
+- Highlight tra ve qua `_formatted`
 
-```sh
-curl http://127.0.0.1:9200/_cluster/health?pretty
-curl "http://127.0.0.1:9200/_cat/nodes?v&h=name,node.role,master,ip"
-```
+PostgreSQL Full-Text Search:
 
-Expected Elasticsearch nodes:
+- `tsvector`, `websearch_to_tsquery`, `ts_rank`
+- `pg_trgm` de bo sung typo/fuzzy matching
+- Facet bang `GROUP BY`
 
-- `nexus-master-1`: master-only
-- `nexus-worker-1`: data/ingest
-- `nexus-worker-2`: data/ingest
-- `nexus-worker-3`: data/ingest
-- `nexus-worker-4`: data/ingest
+## Ghi Chu
 
-See [SCENARIO.md](SCENARIO.md) for the Act 1-4 demo commands.
-Use [kibana/devtools/shopx_demo.es](kibana/devtools/shopx_demo.es) for Kibana
-Dev Tools requests.
-Use [kibana/dashboard/README.md](kibana/dashboard/README.md) for the optional
-zero-result analytics dashboard setup.
-Use [data/baseline_postgres.sql](data/baseline_postgres.sql) for Act 1
-PostgreSQL baseline queries.
-
-## Stop
-
-On a worker:
-
-```sh
-docker compose --env-file .env --env-file /etc/nexus-elastic.env down
-```
-
-On the master:
-
-```sh
-docker compose --env-file .env --env-file /etc/nexus-elastic.env --profile master down
-```
+Raw dataset lon khong duoc commit. Repo chi commit `data/sample` de demo nhanh.
+Neu chay tren VM thay vi may local, nen dung SSH tunnel cho port khong muon public.
