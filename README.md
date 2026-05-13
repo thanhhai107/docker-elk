@@ -78,6 +78,54 @@ API docs:
 http://localhost:8000/docs
 ```
 
+## Chay Elasticsearch Phan Tan Tren GCP Cluster
+
+Local Docker Compose co the chay 1 Elasticsearch node de dev nhanh. Tren cum
+GCP, cung mot `docker-compose.yml` se chay Elasticsearch phan tan bang
+`/etc/nexus-elastic.env` tren tung VM:
+
+```text
+nexus-master-1  -> Elasticsearch master/coordinating node
+nexus-worker-1  -> Elasticsearch data/ingest node
+nexus-worker-2  -> Elasticsearch data/ingest node
+nexus-worker-3  -> Elasticsearch data/ingest node
+nexus-worker-4  -> Elasticsearch data/ingest node
+```
+
+Thu tu khoi dong khuyen nghi:
+
+1. SSH vao tung worker va chay:
+
+```bash
+cd /opt/nexus/docker-elk
+docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d elasticsearch
+```
+
+2. SSH vao master va chay:
+
+```bash
+cd /opt/nexus/docker-elk
+docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d --build postgres meilisearch elasticsearch backend frontend
+docker compose exec -T backend python scripts/ingest_all.py --reset
+```
+
+Neu startup script moi da duoc ap dung, co the dung helper:
+
+```bash
+start-amazon-search-elasticsearch   # tren tung worker
+start-amazon-search-demo            # tren master
+```
+
+Kiem tra cluster:
+
+```bash
+curl "http://localhost:9200/_cat/nodes?v&h=name,node.role,master,ip"
+curl "http://localhost:9200/_cluster/health?pretty"
+```
+
+Ban nen thay 5 node Elasticsearch. Cac shard product/review se duoc phan bo
+tren worker data nodes.
+
 ## Dung Amazon Electronics Dataset
 
 Tai metadata san pham:
