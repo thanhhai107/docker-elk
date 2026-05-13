@@ -15,11 +15,11 @@ ENGINE_LABELS = {
     "postgres": "PostgreSQL FTS",
 }
 SCENARIO_TABS = [
-    ("advanced-ranking", "Scenario 1: Advanced Product Search with Business Ranking"),
-    ("search-filter-facet", "Scenario 2: Search + Filter + Faceted Search"),
-    ("negative-review-analytics", "Scenario 3: Negative Review Analytics"),
-    ("complex-query-intent", "Scenario 4: Complex Query Intent"),
-    ("admin-dashboard-insights", "Scenario 5: Admin Dashboard Insights"),
+    ("act-1-product-discovery", "ACT 1: Product Discovery Search"),
+    ("act-2-review-deep-search", "ACT 2: Review Deep Search"),
+    ("act-3-review-analytics", "ACT 3: Review Analytics & Aggregation"),
+    ("act-4-hybrid-recommendation", "ACT 4: Hybrid / Semantic Recommendation"),
+    ("act-5-scale-readiness", "ACT 5: Worker Failover"),
 ]
 
 
@@ -41,13 +41,13 @@ def scenario_metadata() -> dict[str, Any]:
             "scenarios": {},
             "query_options": [
                 "wireless noise cancelling headphones",
-                "gaming mouse",
-                "battery problem",
-                "portable monitor usb c",
-                "mechanical keyboard",
+                "iphne charger fast charging",
+                "bluetooth speaker bass",
+                "battery drains fast",
+                "overheating problem",
+                "I need headphones for online meetings with good battery and noise cancellation",
+                "worker failover scale resilience",
                 "usb c charger fast charging",
-                "bluetooth speaker",
-                "laptop stand adjustable",
             ],
         }
 
@@ -118,6 +118,8 @@ def render_scenario(scenario_id: str, selected_query: str | None, limit: int) ->
 
     st.markdown(f"**Query:** `{data['query']}`")
     st.caption(data.get("summary", ""))
+    if data.get("winner_reason"):
+        st.info(f"Winner: Elasticsearch. {data['winner_reason']}")
     cols = st.columns(3)
     for col, result in zip(cols, data["results"]):
         with col:
@@ -182,7 +184,7 @@ with st.sidebar:
     selected_query = st.selectbox("Query", query_options)
     limit = st.slider("Results per engine", 3, 20, 10)
 
-tabs = st.tabs([label for _, label in SCENARIO_TABS] + ["Scenario 6: End-to-End Workflow Benchmark"])
+tabs = st.tabs([label for _, label in SCENARIO_TABS] + ["Benchmark Report"])
 
 for tab, (scenario_id, _label) in zip(tabs, SCENARIO_TABS):
     with tab:

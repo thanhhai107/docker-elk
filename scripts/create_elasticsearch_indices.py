@@ -7,6 +7,8 @@ from backend.config import settings
 
 PRODUCT_MAPPING = {
     "settings": {
+        "number_of_shards": 3,
+        "number_of_replicas": 2,
         "analysis": {
             "filter": {
                 "product_synonyms": {
@@ -56,6 +58,8 @@ PRODUCT_MAPPING = {
 
 REVIEW_MAPPING = {
     "settings": {
+        "number_of_shards": 3,
+        "number_of_replicas": 2,
         "analysis": {
             "analyzer": {
                 "review_text": {"tokenizer": "standard", "filter": ["lowercase", "asciifolding"]}
@@ -67,6 +71,8 @@ REVIEW_MAPPING = {
             "review_id": {"type": "keyword"},
             "product_id": {"type": "keyword"},
             "user_id": {"type": "keyword"},
+            "brand": {"type": "keyword"},
+            "category": {"type": "keyword"},
             "rating": {"type": "double"},
             "title": {"type": "text", "analyzer": "review_text"},
             "text": {"type": "text", "analyzer": "review_text"},

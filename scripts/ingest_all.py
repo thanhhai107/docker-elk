@@ -82,6 +82,21 @@ def enrich_products(products: list[dict[str, Any]], aggregates: dict[str, dict[s
     return enriched
 
 
+def enrich_reviews(reviews: list[dict[str, Any]], products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    product_lookup = {product["product_id"]: product for product in products}
+    enriched = []
+    for review in reviews:
+        product = product_lookup.get(review["product_id"], {})
+        enriched.append(
+            {
+                **review,
+                "brand": product.get("brand", "Unknown"),
+                "category": product.get("category", "Electronics"),
+            }
+        )
+    return enriched
+
+
 def ensure_postgres_schema() -> None:
     schema_path = Path(__file__).resolve().parent / "init_postgres.sql"
     with psycopg.connect(settings.postgres_dsn) as conn:
@@ -216,13 +231,14 @@ def main() -> int:
         product_ids=known_products,
     )
     products = enrich_products(products, aggregates)
+    enriched_reviews = enrich_reviews(reviews, products)
 
     print(f"Loaded {len(products)} products and {len(reviews)} reviews")
     ingest_postgres(products, reviews, args.reset)
     ingest_elasticsearch(products, args.reset)
-    ingest_elasticsearch_reviews(reviews, known_products)
+    ingest_elasticsearch_reviews(enriched_reviews, known_products)
     ingest_meilisearch(products, args.reset)
-    ingest_meilisearch_reviews(reviews, known_products)
+    ingest_meilisearch_reviews(enriched_reviews, known_products)
     print("Ingest complete")
     return 0
 

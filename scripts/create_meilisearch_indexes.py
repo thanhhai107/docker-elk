@@ -14,7 +14,7 @@ def create_indexes() -> None:
     wait(client, products.update_displayed_attributes(["*"]))
 
     reviews = client.index("amazon_electronics_reviews")
-    wait(client, reviews.update_filterable_attributes(["product_id", "rating", "verified_purchase"]))
+    wait(client, reviews.update_filterable_attributes(["product_id", "brand", "category", "rating", "verified_purchase"]))
     wait(client, reviews.update_sortable_attributes(["rating", "helpful_vote"]))
     wait(client, reviews.update_searchable_attributes(["title", "text"]))
     wait(client, reviews.update_displayed_attributes(["*"]))

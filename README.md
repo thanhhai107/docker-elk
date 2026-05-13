@@ -7,19 +7,21 @@ search use case:
 - Meilisearch
 - PostgreSQL Full-Text Search
 
-The scenarios focus on realistic end-to-end workflows: business-aware ranking,
-complex filtering, highlighting, faceted search, aggregations, review analytics,
-and workflow benchmarking.
+The scenarios focus on five official product-search scenarios: imperfect product discovery,
+deep review search, review analytics/aggregation, natural-language product
+recommendations, and worker-failover resilience.
 
 ## Demo Features
 
 - Full-text search across product metadata and review text
-- Advanced ranking using relevance + rating + review volume
+- Product discovery with Elasticsearch `multi_match`, field boosting, and fuzziness
+- Review deep search with rating filters, helpful-vote tie-breaks, and highlights
 - Filters by brand, category, price, and rating
 - Faceted search and aggregations
 - Keyword highlighting in search results
-- Negative review analytics
-- Complex query intent with `must`, `should`, `filter`, and `must_not`
+- Review analytics by brand, category, rating, and keyword
+- Hybrid-style recommendation search using natural-language intent expansion
+- Worker-failover check with batch query latency, top-10 retrieval, cluster health, and shard/replica state
 - Benchmarking by total workflow time, not just raw search time
 
 ## Cluster Layout
@@ -108,7 +110,9 @@ curl "http://localhost:9200/_cluster/health?pretty"
 ```
 
 You should see 5 Elasticsearch nodes. Product and review shards should be
-distributed across the worker data nodes.
+distributed across the worker data nodes. The demo indices are created with
+`number_of_shards=3` and `number_of_replicas=2`, so each shard has one primary
+copy plus two replica copies on different Elasticsearch nodes.
 
 ## 2. Load Sample Data
 
@@ -184,12 +188,12 @@ http://localhost:8000/docs
 
 The frontend has 6 tabs:
 
-1. Advanced Ranking
-2. Search + Filter + Facet
-3. Negative Review Analytics
-4. Complex Query Intent
-5. Admin Dashboard Insights
-6. Workflow Benchmark
+1. ACT 1: Product Discovery Search
+2. ACT 2: Review Deep Search
+3. ACT 3: Review Analytics & Aggregation
+4. ACT 4: Hybrid / Semantic Recommendation
+5. ACT 5: Worker Failover / Scale Resilience
+6. Benchmark Report
 
 Each scenario shows 3 columns:
 
@@ -211,12 +215,54 @@ curl "http://localhost:8000/scenarios"
 Run a single scenario:
 
 ```bash
-curl "http://localhost:8000/scenarios/advanced-ranking"
-curl "http://localhost:8000/scenarios/search-filter-facet"
-curl "http://localhost:8000/scenarios/negative-review-analytics"
-curl "http://localhost:8000/scenarios/complex-query-intent"
-curl "http://localhost:8000/scenarios/admin-dashboard-insights"
+curl "http://localhost:8000/scenarios/act-1-product-discovery?q=iphne%20charger%20fast%20charging"
+curl "http://localhost:8000/scenarios/act-2-review-deep-search?q=battery%20drains%20fast"
+curl "http://localhost:8000/scenarios/act-3-review-analytics"
+curl "http://localhost:8000/scenarios/act-4-hybrid-recommendation?q=I%20need%20headphones%20for%20online%20meetings%20with%20good%20battery%20and%20noise%20cancellation"
+curl "http://localhost:8000/scenarios/act-5-scale-readiness"
 ```
+
+## ACT 5 Worker Failover Test
+
+ACT 5 is meant to be run multiple times while changing the Elasticsearch worker
+set:
+
+```bash
+curl "http://localhost:8000/scenarios/act-5-scale-readiness"
+```
+
+Then stop one Elasticsearch worker node and run it again. Stop a second worker
+node and run it again.
+
+Pass condition:
+
+```text
+- product/review queries still return top-10 results
+- Elasticsearch cluster status is green or yellow
+- active_primary_shards is still greater than 0
+- configured_replicas is at least 2 for product and review indices
+- no search errors are returned
+```
+
+Fail condition:
+
+```text
+- cluster status is red
+- primary shards are unavailable
+- number_of_replicas is less than 2 for the demo indices
+- searches fail or return engine errors
+```
+
+If the indices already existed before this setting was added, run ingest with
+`--reset` so the indices are recreated with two replicas:
+
+```bash
+docker compose exec -T backend python scripts/ingest_all.py --reset
+```
+
+Meilisearch and PostgreSQL in this compose stack run as single services, so they
+do not provide the same worker-failover behavior unless external HA/replication
+is added.
 
 Benchmark all workflows:
 
