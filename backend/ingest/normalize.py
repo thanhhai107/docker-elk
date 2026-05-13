@@ -10,7 +10,7 @@ from typing import Any, Iterable
 
 
 def iter_jsonl(path: Path, limit: int | None = None) -> Iterable[dict[str, Any]]:
-    opener = gzip.open if path.suffix == ".gz" else open
+    opener = gzip.open if ".gz" in path.suffixes else open
     with opener(path, "rt", encoding="utf-8") as handle:
         for index, line in enumerate(handle):
             if limit is not None and index >= limit:
@@ -31,11 +31,21 @@ def as_text(value: Any) -> str:
 
 def parse_number(value: Any, default: float = 0) -> float:
     if value is None:
-        return default
+        return float(default)
     if isinstance(value, (int, float)):
         return float(value)
     match = re.search(r"\d+(?:\.\d+)?", str(value).replace(",", ""))
     return float(match.group(0)) if match else default
+
+
+def parse_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
 
 
 def normalize_product(raw: dict[str, Any]) -> dict[str, Any] | None:
@@ -56,8 +66,19 @@ def normalize_product(raw: dict[str, Any]) -> dict[str, Any] | None:
         "title": str(title),
         "features": features,
         "description": description or str(title),
-        "category": str(raw.get("main_category") or (categories[-1] if categories else "Electronics")),
-        "brand": str(raw.get("store") or details.get("Brand") or details.get("Manufacturer") or "Unknown"),
+        "category": str(
+            raw.get("category")
+            or (categories[-1] if categories else None)
+            or raw.get("main_category")
+            or "Electronics"
+        ),
+        "brand": str(
+            raw.get("brand")
+            or raw.get("store")
+            or details.get("Brand")
+            or details.get("Manufacturer")
+            or "Unknown"
+        ),
         "price": parse_number(raw.get("price"), 0),
         "rating": average_rating,
         "review_count": rating_number,
@@ -82,7 +103,7 @@ def normalize_review(raw: dict[str, Any]) -> dict[str, Any] | None:
         "title": as_text(raw.get("title") or raw.get("summary")),
         "text": as_text(raw.get("text") or raw.get("reviewText")),
         "helpful_vote": int(parse_number(raw.get("helpful_vote"), 0)),
-        "verified_purchase": bool(raw.get("verified_purchase") or raw.get("verified")),
+        "verified_purchase": parse_bool(raw.get("verified_purchase", raw.get("verified"))),
         "timestamp": int(timestamp) if str(timestamp or "").isdigit() else None,
     }
 

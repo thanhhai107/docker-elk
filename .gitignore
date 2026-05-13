@@ -8,5 +8,6 @@ __pycache__/
 
 data/raw/*.jsonl
 data/raw/*.jsonl.gz
+data/raw/*.part
 data/products.jsonl
 data/reviews.jsonl

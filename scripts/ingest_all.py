@@ -209,11 +209,15 @@ def main() -> int:
     print(f"Products: {product_path}")
     print(f"Reviews:  {review_path if review_path.exists() else 'not found'}")
     products = load_products(product_path, args.product_limit)
-    reviews, aggregates = load_reviews(review_path if review_path.exists() else None, args.review_limit)
+    known_products = {product["product_id"] for product in products}
+    reviews, aggregates = load_reviews(
+        review_path if review_path.exists() else None,
+        args.review_limit,
+        product_ids=known_products,
+    )
     products = enrich_products(products, aggregates)
 
     print(f"Loaded {len(products)} products and {len(reviews)} reviews")
-    known_products = {product["product_id"] for product in products}
     ingest_postgres(products, reviews, args.reset)
     ingest_elasticsearch(products, args.reset)
     ingest_elasticsearch_reviews(reviews, known_products)
