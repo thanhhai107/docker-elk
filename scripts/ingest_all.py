@@ -157,7 +157,7 @@ def ingest_elasticsearch(products: list[dict[str, Any]], reset: bool) -> None:
         for product in products
     ]
     if actions:
-        helpers.bulk(client, actions, chunk_size=1000, request_timeout=120)
+        helpers.bulk(client.options(request_timeout=120), actions, chunk_size=1000)
     client.indices.refresh(index="amazon_electronics_products")
 
 
@@ -169,7 +169,7 @@ def ingest_elasticsearch_reviews(reviews: list[dict[str, Any]], known_products: 
         if review["product_id"] in known_products
     ]
     if actions:
-        helpers.bulk(client, actions, chunk_size=1000, request_timeout=120)
+        helpers.bulk(client.options(request_timeout=120), actions, chunk_size=1000)
     client.indices.refresh(index="amazon_electronics_reviews")
 
 
