@@ -11,4 +11,5 @@ class Review(BaseModel):
     title: str = ""
     text: str = ""
     helpful_vote: int = 0
+    verified_purchase: bool = False
     timestamp: int | None = None

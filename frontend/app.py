@@ -2,16 +2,38 @@ from __future__ import annotations
 
 import os
 from html import unescape
+from typing import Any
 
 import requests
 import streamlit as st
 
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+ENGINE_LABELS = {
+    "elasticsearch": "Elasticsearch",
+    "meilisearch": "Meilisearch",
+    "postgres": "PostgreSQL FTS",
+}
+SCENARIO_TABS = [
+    ("advanced-ranking", "Advanced Ranking"),
+    ("search-filter-facet", "Search + Filter + Facet"),
+    ("negative-review-analytics", "Negative Review Analytics"),
+    ("complex-query-intent", "Complex Query Intent"),
+    ("admin-dashboard-insights", "Admin Dashboard Insights"),
+]
+FINAL_CONCLUSION = """
+Qua các scenario thực tế với Amazon Electronics Dataset, Elasticsearch outperform Meilisearch và PostgreSQL Full-Text Search ở các workflow phức tạp.
+
+Meilisearch rất phù hợp cho search UI đơn giản, tốc độ nhanh và typo tolerance tốt.
+
+PostgreSQL Full-Text Search phù hợp nếu dữ liệu đã nằm trong database và bài toán search không quá phức tạp.
+
+Tuy nhiên, khi hệ thống cần search nhiều field, ranking theo business logic, filter phức tạp, highlight, faceted search, aggregation và review analytics, Elasticsearch là lựa chọn mạnh hơn.
+"""
 
 
-def get_json(path: str, params: dict | None = None) -> dict:
-    response = requests.get(f"{BACKEND_URL}{path}", params=params, timeout=60)
+def get_json(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    response = requests.get(f"{BACKEND_URL}{path}", params=params, timeout=120)
     response.raise_for_status()
     return response.json()
 
@@ -20,82 +42,162 @@ def clean_highlight(value: str) -> str:
     return unescape(value or "").replace("<em>", "<mark>").replace("</em>", "</mark>")
 
 
-st.set_page_config(page_title="Amazon Search Demo", layout="wide")
-st.title("Amazon Electronics Search Comparison")
-
-with st.sidebar:
-    st.header("Search")
-    query = st.text_input("Query", "wireless noise cancelling headphones")
-    brand = st.text_input("Brand")
-    category = st.text_input("Category")
-    min_price, max_price = st.slider("Price range", 0, 1500, (0, 500), step=10)
-    min_rating = st.slider("Minimum rating", 0.0, 5.0, 4.0, step=0.1)
-    limit = st.slider("Results per engine", 3, 20, 5)
-    run = st.button("Compare", type="primary")
-
-params = {
-    "q": query,
-    "limit": limit,
-    "min_price": min_price,
-    "max_price": max_price,
-    "min_rating": min_rating,
-}
-if brand:
-    params["brand"] = brand
-if category:
-    params["category"] = category
-
-if run or query:
+def scenario_metadata() -> dict[str, Any]:
     try:
-        comparison = get_json("/compare", params)
-        analytics = get_json("/analytics/reviews")
+        return get_json("/scenarios")
+    except requests.RequestException:
+        return {
+            "scenarios": {},
+            "query_options": [
+                "wireless noise cancelling headphones",
+                "gaming mouse",
+                "battery problem",
+                "portable monitor usb c",
+                "mechanical keyboard",
+                "usb c charger fast charging",
+                "bluetooth speaker",
+                "laptop stand adjustable",
+            ],
+        }
+
+
+def render_hit(hit: dict[str, Any], document_type: str) -> None:
+    highlights = hit.get("highlights", {})
+    title = clean_highlight((highlights.get("title") or [hit.get("title", "")])[0])
+    body_key = "text" if document_type == "review" else "description"
+    body = clean_highlight((highlights.get(body_key) or [hit.get(body_key, "")])[0])
+
+    st.markdown(f"**{title or hit.get('product_id') or hit.get('review_id')}**", unsafe_allow_html=True)
+    if document_type == "review":
+        st.caption(
+            f"Product {hit.get('product_id', '')} | rating {hit.get('rating', 0)} | "
+            f"helpful {hit.get('helpful_vote', 0)} | score {hit.get('score')}"
+        )
+    else:
+        rating = hit.get("average_rating", hit.get("rating", 0))
+        reviews = hit.get("rating_number", hit.get("review_count", 0))
+        st.caption(
+            f"{hit.get('brand', 'Unknown')} | {hit.get('category', 'Electronics')} | "
+            f"${float(hit.get('price') or 0):,.2f} | rating {rating} | reviews {reviews} | "
+            f"score {hit.get('score')}"
+        )
+    if body:
+        st.markdown(body, unsafe_allow_html=True)
+
+
+def render_result(result: dict[str, Any]) -> None:
+    label = ENGINE_LABELS.get(result["engine"], result["engine"])
+    st.subheader(label)
+    if result.get("error"):
+        st.error(result["error"])
+        return
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Time", f"{result.get('took_ms', 0)} ms")
+    m2.metric("Requests", result.get("number_of_requests", 0))
+    m3.metric("Hits", result.get("total", 0))
+
+    st.caption(
+        f"Highlight: {'yes' if result.get('has_highlight') else 'no'} | "
+        f"Aggregation: {'yes' if result.get('has_aggregation') else 'no'} | "
+        f"Custom ranking: {'yes' if result.get('has_custom_ranking') else 'no'} | "
+        f"Backend: {result.get('backend_complexity')}"
+    )
+    st.write(result.get("note", ""))
+
+    aggregations = result.get("aggregations") or {}
+    if aggregations:
+        with st.expander("Aggregation / Facet", expanded=False):
+            st.json(aggregations)
+
+    for hit in result.get("hits", [])[:5]:
+        render_hit(hit, result.get("document_type", "product"))
+        st.divider()
+
+
+def render_scenario(scenario_id: str, selected_query: str | None, limit: int) -> None:
+    try:
+        params: dict[str, Any] = {"limit": limit}
+        if selected_query:
+            params["q"] = selected_query
+        data = get_json(f"/scenarios/{scenario_id}", params)
     except requests.RequestException as exc:
         st.error(f"Backend is not ready: {exc}")
-        st.stop()
+        return
 
-    metric_cols = st.columns(3)
-    for column, result in zip(metric_cols, comparison["results"]):
-        column.metric(
-            result["engine"],
-            "error" if result.get("error") else f'{result.get("took_ms", 0)} ms',
-            f'{result.get("total", 0)} hits',
+    st.markdown(f"**Query:** `{data['query']}`")
+    st.caption(data.get("summary", ""))
+    cols = st.columns(3)
+    for col, result in zip(cols, data["results"]):
+        with col:
+            render_result(result)
+
+
+def render_benchmark(limit: int) -> None:
+    try:
+        data = get_json("/workflow-benchmark", {"limit": limit})
+    except requests.RequestException as exc:
+        st.error(f"Backend is not ready: {exc}")
+        return
+
+    rows = []
+    for item in data["rows"]:
+        engines = item["engines"]
+        rows.append(
+            {
+                "Workflow": item["workflow"],
+                "Query": item["query"],
+                "Elasticsearch": describe_engine(engines.get("elasticsearch", {})),
+                "Meilisearch": describe_engine(engines.get("meilisearch", {})),
+                "PostgreSQL FTS": describe_engine(engines.get("postgres", {})),
+                "Winner": item["winner"],
+            }
         )
+    st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    st.subheader("Review Analytics")
-    st.json(analytics, expanded=False)
+    cols = st.columns(3)
+    for engine, col in zip(["elasticsearch", "meilisearch", "postgres"], cols):
+        with col:
+            st.subheader(ENGINE_LABELS[engine])
+            engine_rows = [
+                {
+                    "workflow": row["workflow"],
+                    **row["engines"].get(engine, {}),
+                }
+                for row in data["rows"]
+            ]
+            st.dataframe(engine_rows, use_container_width=True, hide_index=True)
 
-    tabs = st.tabs([result["engine"] for result in comparison["results"]])
-    for tab, result in zip(tabs, comparison["results"]):
-        with tab:
-            if result.get("error"):
-                st.error(result["error"])
-                continue
+    st.markdown(FINAL_CONCLUSION)
 
-            left, right = st.columns([3, 1])
-            with right:
-                st.caption("Facets")
-                st.write("Brands")
-                st.dataframe(result.get("facets", {}).get("brands", []), use_container_width=True)
-                st.write("Categories")
-                st.dataframe(result.get("facets", {}).get("categories", []), use_container_width=True)
 
-            with left:
-                for index, hit in enumerate(result.get("hits", []), start=1):
-                    highlights = hit.get("highlights", {})
-                    title = clean_highlight((highlights.get("title") or [hit.get("title", "")])[0])
-                    description = clean_highlight(
-                        (highlights.get("description") or [hit.get("description", "")])[0]
-                    )
-                    st.markdown(f"#### {index}. {title}", unsafe_allow_html=True)
-                    st.caption(
-                        f'{hit.get("brand", "Unknown")} | {hit.get("category", "Electronics")} | '
-                        f'${hit.get("price", 0):,.2f} | rating {hit.get("rating", 0)} | '
-                        f'score {hit.get("score")}'
-                    )
-                    st.markdown(description, unsafe_allow_html=True)
-                    st.caption(
-                        f'Loaded reviews: {hit.get("loaded_review_count", 0)} | '
-                        f'Avg review rating: {hit.get("avg_review_rating", 0)} | '
-                        f'Helpful votes: {hit.get("helpful_votes", 0)}'
-                    )
-                    st.divider()
+def describe_engine(engine: dict[str, Any]) -> str:
+    if not engine:
+        return "n/a"
+    return (
+        f"{engine.get('number_of_requests')} req, "
+        f"{engine.get('total_workflow_time_ms')} ms, "
+        f"score {engine.get('score')}/5"
+    )
+
+
+st.set_page_config(page_title="Amazon Electronics Search Demo", layout="wide")
+st.title("Amazon Electronics Search Demo")
+
+metadata = scenario_metadata()
+query_options = metadata["query_options"]
+
+with st.sidebar:
+    st.header("Demo Controls")
+    use_defaults = st.checkbox("Use scenario default query", value=True)
+    selected_query = st.selectbox("Query", query_options)
+    limit = st.slider("Results per engine", 3, 20, 10)
+
+tabs = st.tabs([label for _, label in SCENARIO_TABS] + ["Workflow Benchmark"])
+
+for tab, (scenario_id, _label) in zip(tabs, SCENARIO_TABS):
+    with tab:
+        render_scenario(scenario_id, None if use_defaults else selected_query, limit)
+
+with tabs[-1]:
+    render_benchmark(limit)

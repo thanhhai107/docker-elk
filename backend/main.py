@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 
 from backend.services.benchmark_service import BenchmarkService
 from backend.services.elasticsearch_service import ElasticsearchSearchService
 from backend.services.meilisearch_service import MeiliSearchService
 from backend.services.postgres_service import PostgresSearchService
+from backend.services.workflow_service import WorkflowService
 
 
 app = FastAPI(title="Amazon Electronics Search Demo")
@@ -66,3 +67,25 @@ def review_analytics() -> dict[str, Any]:
         except Exception as exc:
             output[service.engine] = {"error": str(exc)}
     return output
+
+
+@app.get("/scenarios")
+def scenarios() -> dict[str, Any]:
+    return WorkflowService().list_scenarios()
+
+
+@app.get("/scenarios/{scenario_id}")
+def run_scenario(
+    scenario_id: str,
+    q: str | None = None,
+    limit: int = Query(10, ge=1, le=50),
+) -> dict[str, Any]:
+    try:
+        return WorkflowService().run(scenario_id, q, limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown scenario: {scenario_id}") from exc
+
+
+@app.get("/workflow-benchmark")
+def workflow_benchmark(limit: int = Query(10, ge=1, le=50)) -> dict[str, Any]:
+    return WorkflowService().benchmark(limit)

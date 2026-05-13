@@ -4,6 +4,7 @@ import gzip
 import json
 import re
 from collections import defaultdict
+from hashlib import sha1
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -44,18 +45,24 @@ def normalize_product(raw: dict[str, Any]) -> dict[str, Any] | None:
         return None
     categories = raw.get("categories") or []
     details = raw.get("details") or {}
+    features = as_text(raw.get("features"))
     description = " ".join(
-        part for part in [as_text(raw.get("description")), as_text(raw.get("features"))] if part
+        part for part in [as_text(raw.get("description")), features] if part
     )
+    average_rating = parse_number(raw.get("average_rating") or raw.get("rating"), 0)
+    rating_number = int(parse_number(raw.get("rating_number") or raw.get("review_count"), 0))
     return {
         "product_id": str(product_id),
         "title": str(title),
+        "features": features,
         "description": description or str(title),
         "category": str(raw.get("main_category") or (categories[-1] if categories else "Electronics")),
         "brand": str(raw.get("store") or details.get("Brand") or details.get("Manufacturer") or "Unknown"),
         "price": parse_number(raw.get("price"), 0),
-        "rating": parse_number(raw.get("average_rating") or raw.get("rating"), 0),
-        "review_count": int(parse_number(raw.get("rating_number") or raw.get("review_count"), 0)),
+        "rating": average_rating,
+        "review_count": rating_number,
+        "average_rating": average_rating,
+        "rating_number": rating_number,
     }
 
 
@@ -65,7 +72,8 @@ def normalize_review(raw: dict[str, Any]) -> dict[str, Any] | None:
         return None
     user_id = str(raw.get("user_id") or raw.get("reviewerID") or "anonymous")
     timestamp = raw.get("timestamp")
-    review_id = str(raw.get("review_id") or f"{product_id}:{user_id}:{timestamp or raw.get('title', '')}")
+    review_key = f"{product_id}:{user_id}:{timestamp or raw.get('title', '')}:{raw.get('text', '')[:80]}"
+    review_id = str(raw.get("review_id") or raw.get("id") or sha1(review_key.encode("utf-8")).hexdigest())
     return {
         "review_id": review_id,
         "product_id": str(product_id),
@@ -74,6 +82,7 @@ def normalize_review(raw: dict[str, Any]) -> dict[str, Any] | None:
         "title": as_text(raw.get("title") or raw.get("summary")),
         "text": as_text(raw.get("text") or raw.get("reviewText")),
         "helpful_vote": int(parse_number(raw.get("helpful_vote"), 0)),
+        "verified_purchase": bool(raw.get("verified_purchase") or raw.get("verified")),
         "timestamp": int(timestamp) if str(timestamp or "").isdigit() else None,
     }
 

@@ -12,7 +12,7 @@ class MeiliSearchService:
 
     def __init__(self) -> None:
         self.client = meilisearch.Client(settings.meili_url, settings.meili_master_key)
-        self.index = self.client.index("products")
+        self.index = self.client.index("amazon_electronics_products")
 
     def search(self, params: dict[str, Any]) -> dict[str, Any]:
         filters = self._filters(params)

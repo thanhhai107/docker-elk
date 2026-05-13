@@ -18,12 +18,15 @@ from scripts.create_meilisearch_indexes import create_indexes
 PRODUCT_COLUMNS = [
     "product_id",
     "title",
+    "features",
     "description",
     "category",
     "brand",
     "price",
     "rating",
     "review_count",
+    "average_rating",
+    "rating_number",
     "avg_review_rating",
     "loaded_review_count",
     "helpful_votes",
@@ -38,6 +41,7 @@ REVIEW_COLUMNS = [
     "title",
     "text",
     "helpful_vote",
+    "verified_purchase",
     "timestamp",
 ]
 
@@ -71,8 +75,17 @@ def enrich_products(products: list[dict[str, Any]], aggregates: dict[str, dict[s
                 "review_text": "",
             },
         )
-        enriched.append({**product, **aggregate})
+        merged = {**product, **aggregate}
+        merged["average_rating"] = merged.get("average_rating", merged.get("rating", 0))
+        merged["rating_number"] = merged.get("rating_number", merged.get("review_count", 0))
+        enriched.append(merged)
     return enriched
+
+
+def ensure_postgres_schema() -> None:
+    schema_path = Path(__file__).resolve().parent / "init_postgres.sql"
+    with psycopg.connect(settings.postgres_dsn) as conn:
+        conn.execute(schema_path.read_text(encoding="utf-8"))
 
 
 def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]], reset: bool) -> None:
@@ -82,12 +95,15 @@ def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]
         VALUES ({placeholders})
         ON CONFLICT (product_id) DO UPDATE SET
             title = excluded.title,
+            features = excluded.features,
             description = excluded.description,
             category = excluded.category,
             brand = excluded.brand,
             price = excluded.price,
             rating = excluded.rating,
             review_count = excluded.review_count,
+            average_rating = excluded.average_rating,
+            rating_number = excluded.rating_number,
             avg_review_rating = excluded.avg_review_rating,
             loaded_review_count = excluded.loaded_review_count,
             helpful_votes = excluded.helpful_votes,
@@ -98,6 +114,7 @@ def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]
         VALUES ({", ".join(["%s"] * len(REVIEW_COLUMNS))})
         ON CONFLICT (review_id) DO NOTHING
     """
+    ensure_postgres_schema()
     with psycopg.connect(settings.postgres_dsn) as conn:
         if reset:
             conn.execute("TRUNCATE TABLE reviews, products RESTART IDENTITY")
@@ -116,24 +133,58 @@ def ingest_elasticsearch(products: list[dict[str, Any]], reset: bool) -> None:
     create_indices(reset=reset)
     client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
     actions = [
-        {"_index": "products", "_id": product["product_id"], "_source": product}
+        {"_index": "amazon_electronics_products", "_id": product["product_id"], "_source": product}
         for product in products
     ]
-    helpers.bulk(client, actions, chunk_size=1000, request_timeout=120)
-    client.indices.refresh(index="products")
+    if actions:
+        helpers.bulk(client, actions, chunk_size=1000, request_timeout=120)
+    client.indices.refresh(index="amazon_electronics_products")
+
+
+def ingest_elasticsearch_reviews(reviews: list[dict[str, Any]], known_products: set[str]) -> None:
+    client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
+    actions = [
+        {"_index": "amazon_electronics_reviews", "_id": review["review_id"], "_source": review}
+        for review in reviews
+        if review["product_id"] in known_products
+    ]
+    if actions:
+        helpers.bulk(client, actions, chunk_size=1000, request_timeout=120)
+    client.indices.refresh(index="amazon_electronics_reviews")
 
 
 def ingest_meilisearch(products: list[dict[str, Any]], reset: bool) -> None:
     client = meilisearch.Client(settings.meili_url, settings.meili_master_key)
     if reset:
-        try:
-            client.delete_index("products")
-        except Exception:
-            pass
-        client.create_index("products", {"primaryKey": "product_id"})
+        for index_name in ["amazon_electronics_products", "amazon_electronics_reviews"]:
+            try:
+                wait_task(client, client.delete_index(index_name))
+            except Exception:
+                pass
+        wait_task(client, client.create_index("amazon_electronics_products", {"primaryKey": "product_id"}))
+        wait_task(client, client.create_index("amazon_electronics_reviews", {"primaryKey": "review_id"}))
     create_indexes()
-    task = client.index("products").add_documents(products, primary_key="product_id")
-    client.wait_for_task(task.task_uid, timeout_in_ms=120000)
+    task = client.index("amazon_electronics_products").add_documents(products, primary_key="product_id")
+    wait_task(client, task)
+
+
+def ingest_meilisearch_reviews(reviews: list[dict[str, Any]], known_products: set[str]) -> None:
+    client = meilisearch.Client(settings.meili_url, settings.meili_master_key)
+    review_docs = [review for review in reviews if review["product_id"] in known_products]
+    if not review_docs:
+        return
+    task = client.index("amazon_electronics_reviews").add_documents(review_docs, primary_key="review_id")
+    wait_task(client, task)
+
+
+def task_uid(task: Any) -> int:
+    if hasattr(task, "task_uid"):
+        return task.task_uid
+    return int(task["taskUid"])
+
+
+def wait_task(client: meilisearch.Client, task: Any) -> None:
+    client.wait_for_task(task_uid(task), timeout_in_ms=120000)
 
 
 def main() -> int:
@@ -157,9 +208,12 @@ def main() -> int:
     products = enrich_products(products, aggregates)
 
     print(f"Loaded {len(products)} products and {len(reviews)} reviews")
+    known_products = {product["product_id"] for product in products}
     ingest_postgres(products, reviews, args.reset)
     ingest_elasticsearch(products, args.reset)
+    ingest_elasticsearch_reviews(reviews, known_products)
     ingest_meilisearch(products, args.reset)
+    ingest_meilisearch_reviews(reviews, known_products)
     print("Ingest complete")
     return 0
 

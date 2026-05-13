@@ -37,6 +37,7 @@ PRODUCT_MAPPING = {
                 "search_analyzer": "product_search",
                 "fields": {"keyword": {"type": "keyword"}},
             },
+            "features": {"type": "text", "analyzer": "product_index", "search_analyzer": "product_search"},
             "description": {"type": "text", "analyzer": "product_index", "search_analyzer": "product_search"},
             "review_text": {"type": "text", "analyzer": "product_index", "search_analyzer": "product_search"},
             "category": {"type": "keyword", "fields": {"text": {"type": "text"}}},
@@ -44,6 +45,8 @@ PRODUCT_MAPPING = {
             "price": {"type": "double"},
             "rating": {"type": "double"},
             "review_count": {"type": "integer"},
+            "average_rating": {"type": "double"},
+            "rating_number": {"type": "integer"},
             "avg_review_rating": {"type": "double"},
             "loaded_review_count": {"type": "integer"},
             "helpful_votes": {"type": "integer"},
@@ -51,13 +54,41 @@ PRODUCT_MAPPING = {
     },
 }
 
+REVIEW_MAPPING = {
+    "settings": {
+        "analysis": {
+            "analyzer": {
+                "review_text": {"tokenizer": "standard", "filter": ["lowercase", "asciifolding"]}
+            }
+        }
+    },
+    "mappings": {
+        "properties": {
+            "review_id": {"type": "keyword"},
+            "product_id": {"type": "keyword"},
+            "user_id": {"type": "keyword"},
+            "rating": {"type": "double"},
+            "title": {"type": "text", "analyzer": "review_text"},
+            "text": {"type": "text", "analyzer": "review_text"},
+            "helpful_vote": {"type": "integer"},
+            "verified_purchase": {"type": "boolean"},
+            "timestamp": {"type": "date", "format": "epoch_millis||epoch_second||strict_date_optional_time"},
+        }
+    },
+}
+
 
 def create_indices(reset: bool = False) -> None:
     client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
-    if reset and client.indices.exists(index="products"):
-        client.indices.delete(index="products")
-    if not client.indices.exists(index="products"):
-        client.indices.create(index="products", body=PRODUCT_MAPPING)
+    indices = {
+        "amazon_electronics_products": PRODUCT_MAPPING,
+        "amazon_electronics_reviews": REVIEW_MAPPING,
+    }
+    for index, mapping in indices.items():
+        if reset and client.indices.exists(index=index):
+            client.indices.delete(index=index)
+        if not client.indices.exists(index=index):
+            client.indices.create(index=index, body=mapping)
 
 
 if __name__ == "__main__":

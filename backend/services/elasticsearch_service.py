@@ -12,14 +12,14 @@ class ElasticsearchSearchService:
 
     def __init__(self) -> None:
         self.client = Elasticsearch(settings.elasticsearch_url, request_timeout=30)
-        self.index = "products"
+        self.index = "amazon_electronics_products"
 
     def search(self, params: dict[str, Any]) -> dict[str, Any]:
         filters = []
         if params.get("brand"):
-            filters.append({"term": {"brand.keyword": params["brand"]}})
+            filters.append({"term": {"brand": params["brand"]}})
         if params.get("category"):
-            filters.append({"term": {"category.keyword": params["category"]}})
+            filters.append({"term": {"category": params["category"]}})
         if params.get("min_price") is not None or params.get("max_price") is not None:
             filters.append({"range": {"price": self._range(params, "price")}})
         if params.get("min_rating") is not None:
@@ -33,7 +33,7 @@ class ElasticsearchSearchService:
                         {
                             "multi_match": {
                                 "query": params["q"],
-                                "fields": ["title^4", "brand^2", "category^2", "description", "review_text"],
+                                "fields": ["title^4", "features^2", "brand^2", "category^2", "description", "review_text"],
                                 "fuzziness": "AUTO",
                             }
                         }
@@ -43,8 +43,8 @@ class ElasticsearchSearchService:
             },
             "highlight": {"fields": {"title": {}, "description": {}, "review_text": {}}},
             "aggs": {
-                "brands": {"terms": {"field": "brand.keyword", "size": 10}},
-                "categories": {"terms": {"field": "category.keyword", "size": 10}},
+                "brands": {"terms": {"field": "brand", "size": 10}},
+                "categories": {"terms": {"field": "category", "size": 10}},
                 "price_ranges": {
                     "range": {
                         "field": "price",

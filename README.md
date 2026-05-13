@@ -7,60 +7,63 @@ Amazon mini:
 - Meilisearch
 - PostgreSQL Full-Text Search
 
-Ung dung dung FastAPI cho backend, Streamlit cho giao dien demo, Docker Compose
-cho Elasticsearch, Meilisearch va PostgreSQL. Dataset dau vao la Amazon
-Electronics metadata va review JSONL/GZ.
+Trong demo nay, Elasticsearch khong duoc cho thang bang keyword search don
+gian. Cac scenario tap trung vao end-to-end workflow thuc te: ranking theo
+business logic, filter phuc tap, highlight, faceted search, aggregation va
+review analytics.
 
 ## Chuc Nang Demo
 
-- Full-text search tren title, description va review text
-- Typo tolerant / fuzzy search
+- Full-text search tren product metadata va review text
+- Advanced ranking bang relevance + rating + review volume
 - Filter theo brand, category, price, rating
-- Faceted search / aggregation theo brand va category
+- Faceted search va aggregation
 - Highlight tu khoa trong ket qua
-- Review analytics tu review events
-- So sanh latency cua Elasticsearch, Meilisearch va PostgreSQL
-- So sanh do phu hop bang danh sach ket qua cua tung engine
+- Negative review analytics
+- Complex query intent voi must, should, filter, must_not
+- Benchmark theo total workflow time, khong chi search time
 
 ## Cau Truc
 
 ```text
 .
-├── docker-compose.yml
-├── data/
-│   ├── download_datasets.py
-│   ├── products.jsonl              # optional local input, ignored by Git
-│   ├── reviews.jsonl               # optional local input, ignored by Git
-│   ├── raw/                        # downloaded Amazon files, ignored by Git
-│   └── sample/                     # small demo dataset
-├── backend/
-│   ├── main.py
-│   ├── config.py
-│   ├── ingest/
-│   ├── services/
-│   ├── models/
-│   └── utils/
-├── frontend/
-│   └── app.py
-└── scripts/
-    ├── init_postgres.sql
-    ├── create_elasticsearch_indices.py
-    ├── create_meilisearch_indexes.py
-    └── ingest_all.py
+|-- docker-compose.yml
+|-- data/
+|   |-- download_datasets.py
+|   |-- raw/
+|   |-- sample/
+|   |   |-- products.jsonl
+|   |   `-- reviews.jsonl
+|-- backend/
+|   |-- main.py
+|   |-- config.py
+|   |-- ingest/
+|   |-- services/
+|   |-- models/
+|   `-- utils/
+|-- frontend/
+|   `-- app.py
+`-- scripts/
+    |-- init_postgres.sql
+    |-- create_elasticsearch_indices.py
+    |-- create_meilisearch_indexes.py
+    `-- ingest_all.py
 ```
 
 ## Chay Nhanh Bang Sample Data
+
+Neu da tung chay version cu, reset volume truoc:
+
+```sh
+docker compose down -v
+```
+
+Sau do:
 
 ```sh
 cp .env.example .env
 docker compose up -d --build
 docker compose exec backend python scripts/ingest_all.py --reset
-```
-
-Neu truoc do da chay repo voi PostgreSQL credentials cu, reset volume truoc:
-
-```sh
-docker compose down -v
 ```
 
 Mo giao dien:
@@ -69,7 +72,7 @@ Mo giao dien:
 http://localhost:8501
 ```
 
-API backend:
+API docs:
 
 ```text
 http://localhost:8000/docs
@@ -108,49 +111,91 @@ Tang limit neu may du RAM va thoi gian ingest:
 docker compose exec backend python scripts/ingest_all.py --reset --product-limit 80000 --review-limit 200000
 ```
 
-## Endpoint Chinh
+## Demo Scenarios
 
-So sanh 3 engine:
+Frontend co 6 tab:
 
-```sh
-curl "http://localhost:8000/compare?q=wireless%20noise%20cancelling%20headphones&min_rating=4&max_price=500"
+1. Advanced Ranking
+2. Search + Filter + Facet
+3. Negative Review Analytics
+4. Complex Query Intent
+5. Admin Dashboard Insights
+6. Workflow Benchmark
+
+Moi scenario hien thi 3 cot:
+
+```text
+Elasticsearch | Meilisearch | PostgreSQL FTS
 ```
 
-Tim tren tung engine:
+Moi cot co time, so request/query, total hits, highlights, aggregations/facets
+neu co, va nhan xet ngan ve engine do.
+
+## Endpoint Chinh
+
+Danh sach scenario va query mau:
 
 ```sh
+curl "http://localhost:8000/scenarios"
+```
+
+Chay mot scenario:
+
+```sh
+curl "http://localhost:8000/scenarios/advanced-ranking"
+curl "http://localhost:8000/scenarios/search-filter-facet"
+curl "http://localhost:8000/scenarios/negative-review-analytics"
+curl "http://localhost:8000/scenarios/complex-query-intent"
+curl "http://localhost:8000/scenarios/admin-dashboard-insights"
+```
+
+Benchmark tat ca workflow:
+
+```sh
+curl "http://localhost:8000/workflow-benchmark"
+```
+
+Endpoint search co ban van duoc giu lai:
+
+```sh
+curl "http://localhost:8000/compare?q=bluetooth%20speaker"
 curl "http://localhost:8000/search/elasticsearch?q=bluetooth%20speaker"
 curl "http://localhost:8000/search/meilisearch?q=bluetooth%20speaker"
 curl "http://localhost:8000/search/postgres?q=bluetooth%20speaker"
 ```
 
-Review analytics:
-
-```sh
-curl "http://localhost:8000/analytics/reviews"
-```
-
-## Vai Tro Tung Engine
+## Ket Luan Demo
 
 Elasticsearch:
 
-- Fuzzy search bang `multi_match` voi `fuzziness: AUTO`
-- Synonym analyzer cho cac cum nhu `anc`, `noise cancelling`, `headphones`
-- Highlight va aggregation manh
+- Manh nhat khi workflow can search + ranking + filter + highlight + aggregation trong cung mot request.
+- `function_score`, `bool query`, `must/should/filter/must_not`, `terms`, `range`, `stats`, highlight deu nam trong DSL.
+- Phu hop lam search engine va analytics engine cho e-commerce lon.
 
 Meilisearch:
 
-- Typo tolerance mac dinh, phu hop demo search UX nhanh
-- Facet/filter don gian theo brand, category, price, rating
-- Highlight tra ve qua `_formatted`
+- Rat tot cho search UI don gian, nhanh, typo tolerance tot.
+- Co facet/filter, nhung analytics metric va custom ranking phuc tap khong linh hoat bang Elasticsearch.
 
 PostgreSQL Full-Text Search:
 
-- `tsvector`, `websearch_to_tsquery`, `ts_rank`
-- `pg_trgm` de bo sung typo/fuzzy matching
-- Facet bang `GROUP BY`
+- Phu hop khi du lieu da nam trong relational database va bai toan search vua phai.
+- Lam duoc nhieu workflow, nhung SQL dai hon, can nhieu query hon, backend phai merge ket qua.
+
+Ket luan can trinh bay:
+
+```text
+Qua cac scenario thuc te voi Amazon Electronics Dataset, Elasticsearch outperform Meilisearch va PostgreSQL Full-Text Search o cac workflow phuc tap.
+
+Meilisearch rat phu hop cho search UI don gian, toc do nhanh va typo tolerance tot.
+
+PostgreSQL Full-Text Search phu hop neu du lieu da nam trong database va bai toan search khong qua phuc tap.
+
+Tuy nhien, khi he thong can search nhieu field, ranking theo business logic, filter phuc tap, highlight, faceted search, aggregation va review analytics, Elasticsearch la lua chon manh hon.
+```
 
 ## Ghi Chu
 
 Raw dataset lon khong duoc commit. Repo chi commit `data/sample` de demo nhanh.
-Neu chay tren VM thay vi may local, nen dung SSH tunnel cho port khong muon public.
+Neu chay tren VM thay vi may local, nen dung SSH tunnel cho PostgreSQL,
+Elasticsearch va Meilisearch thay vi mo public cac port engine.
