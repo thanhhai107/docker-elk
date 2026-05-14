@@ -53,6 +53,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reviews", type=Path, default=None, help="Review JSONL/GZ path.")
     parser.add_argument("--product-limit", type=int, default=5000)
     parser.add_argument("--review-limit", type=int, default=20000)
+    parser.add_argument("--es-bulk-chunk-size", type=int, default=250)
+    parser.add_argument("--es-request-timeout", type=int, default=300)
+    parser.add_argument("--es-max-retries", type=int, default=3)
     parser.add_argument(
         "--all",
         action="store_true",
@@ -165,7 +168,13 @@ def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]
                 cur.executemany(review_sql, review_rows)
 
 
-def ingest_elasticsearch(products: list[dict[str, Any]], reset: bool) -> None:
+def ingest_elasticsearch(
+    products: list[dict[str, Any]],
+    reset: bool,
+    chunk_size: int,
+    request_timeout: int,
+    max_retries: int,
+) -> None:
     create_indices(reset=reset)
     client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
     actions = [
@@ -173,11 +182,17 @@ def ingest_elasticsearch(products: list[dict[str, Any]], reset: bool) -> None:
         for product in products
     ]
     if actions:
-        run_bulk(client, actions, "Elasticsearch products")
+        run_bulk(client, actions, "Elasticsearch products", chunk_size, request_timeout, max_retries)
     client.indices.refresh(index="amazon_electronics_products")
 
 
-def ingest_elasticsearch_reviews(reviews: list[dict[str, Any]], known_products: set[str]) -> None:
+def ingest_elasticsearch_reviews(
+    reviews: list[dict[str, Any]],
+    known_products: set[str],
+    chunk_size: int,
+    request_timeout: int,
+    max_retries: int,
+) -> None:
     client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
     actions = [
         {"_index": "amazon_electronics_reviews", "_id": review["review_id"], "_source": review}
@@ -185,13 +200,29 @@ def ingest_elasticsearch_reviews(reviews: list[dict[str, Any]], known_products: 
         if review["product_id"] in known_products
     ]
     if actions:
-        run_bulk(client, actions, "Elasticsearch reviews")
+        run_bulk(client, actions, "Elasticsearch reviews", chunk_size, request_timeout, max_retries)
     client.indices.refresh(index="amazon_electronics_reviews")
 
 
-def run_bulk(client: Elasticsearch, actions: list[dict[str, Any]], label: str) -> None:
+def run_bulk(
+    client: Elasticsearch,
+    actions: list[dict[str, Any]],
+    label: str,
+    chunk_size: int,
+    request_timeout: int,
+    max_retries: int,
+) -> None:
     try:
-        helpers.bulk(client.options(request_timeout=120), actions, chunk_size=1000)
+        helpers.bulk(
+            client.options(request_timeout=request_timeout),
+            actions,
+            chunk_size=chunk_size,
+            max_retries=max_retries,
+            initial_backoff=2,
+            max_backoff=30,
+            retry_on_status=(429, 502, 503, 504),
+            request_timeout=request_timeout,
+        )
     except BulkIndexError as exc:
         print(f"{label} failed: {len(exc.errors)} bulk item errors")
         for error in exc.errors[:5]:
@@ -274,6 +305,12 @@ def main() -> int:
 
     print(f"Loaded {len(products)} products and {len(reviews)} reviews")
     print(f"Engine: {args.engine}")
+    print(
+        "Elasticsearch bulk: "
+        f"chunk_size={args.es_bulk_chunk_size}, "
+        f"request_timeout={args.es_request_timeout}, "
+        f"max_retries={args.es_max_retries}"
+    )
 
     if args.engine in {"all", "postgres"}:
         print("Ingesting PostgreSQL...")
@@ -281,9 +318,21 @@ def main() -> int:
 
     if args.engine in {"all", "elasticsearch"}:
         print("Ingesting Elasticsearch products...")
-        ingest_elasticsearch(products, args.reset)
+        ingest_elasticsearch(
+            products,
+            args.reset,
+            args.es_bulk_chunk_size,
+            args.es_request_timeout,
+            args.es_max_retries,
+        )
         print("Ingesting Elasticsearch reviews...")
-        ingest_elasticsearch_reviews(enriched_reviews, known_products)
+        ingest_elasticsearch_reviews(
+            enriched_reviews,
+            known_products,
+            args.es_bulk_chunk_size,
+            args.es_request_timeout,
+            args.es_max_retries,
+        )
 
     if args.engine in {"all", "meilisearch"}:
         print("Ingesting Meilisearch products...")
