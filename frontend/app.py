@@ -14,12 +14,15 @@ ENGINE_LABELS = {
     "meilisearch": "Meilisearch",
     "postgres": "PostgreSQL FTS",
 }
+SERVICE_LABELS = {
+    "all": "All services",
+    **ENGINE_LABELS,
+}
 SCENARIO_TABS = [
     ("act-1-product-discovery", "ACT 1: Product Discovery Search"),
     ("act-2-review-deep-search", "ACT 2: Review Deep Search"),
     ("act-3-review-analytics", "ACT 3: Review Analytics & Aggregation"),
     ("act-4-hybrid-recommendation", "ACT 4: Hybrid / Semantic Recommendation"),
-    ("act-5-scale-readiness", "ACT 5: Worker Failover"),
 ]
 
 
@@ -87,9 +90,9 @@ def render_result(result: dict[str, Any]) -> None:
         st.divider()
 
 
-def render_scenario(scenario_id: str, selected_query: str | None, limit: int) -> None:
+def render_scenario(scenario_id: str, selected_query: str | None, limit: int, engine: str) -> None:
     try:
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit, "engine": engine}
         if selected_query:
             params["q"] = selected_query
         data = get_json(f"/scenarios/{scenario_id}", params)
@@ -101,8 +104,14 @@ def render_scenario(scenario_id: str, selected_query: str | None, limit: int) ->
     st.caption(data.get("summary", ""))
     if data.get("winner_reason"):
         st.info(f"Winner: Elasticsearch. {data['winner_reason']}")
-    cols = st.columns(3)
-    for col, result in zip(cols, data["results"]):
+
+    results = data["results"]
+    if len(results) == 1:
+        render_result(results[0])
+        return
+
+    cols = st.columns(len(results))
+    for col, result in zip(cols, results):
         with col:
             render_result(result)
 
@@ -154,40 +163,57 @@ def describe_engine(engine: dict[str, Any]) -> str:
 
 
 st.set_page_config(page_title="Amazon Electronics Search Demo", layout="wide")
+st.markdown(
+    """
+    <style>
+    div[data-testid="stFormSubmitButton"] {
+        padding-top: 1.72rem;
+    }
+    div[data-testid="stForm"] button[kind="primaryFormSubmit"] {
+        width: 100%;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("Amazon Electronics Search Demo")
 
 scenario_labels = {label: scenario_id for scenario_id, label in SCENARIO_TABS}
+service_labels = {label: engine for engine, label in SERVICE_LABELS.items()}
 
 if "search_request" not in st.session_state:
     st.session_state.search_request = None
 
 with st.form("search_form"):
-    search_col, act_col, limit_col, button_col = st.columns([5, 2.4, 1.2, 1])
+    search_col, act_col, service_col, limit_col, button_col = st.columns([4.4, 2.4, 1.9, 1.1, 1])
     with search_col:
         query = st.text_input("Search query", placeholder="Type your product need, review problem, or analytics keyword")
     with act_col:
         selected_label = st.selectbox("Act", list(scenario_labels))
+    with service_col:
+        selected_service_label = st.selectbox("Service", list(service_labels))
     with limit_col:
         limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1)
     with button_col:
-        st.write("")
         submitted = st.form_submit_button("Search", use_container_width=True)
 
 if submitted:
     selected_scenario = scenario_labels[selected_label]
+    selected_service = service_labels[selected_service_label]
     cleaned_query = query.strip()
-    if not cleaned_query and selected_scenario not in {"act-3-review-analytics", "act-5-scale-readiness"}:
+    if not cleaned_query and selected_scenario != "act-3-review-analytics":
         st.warning("Enter a query before searching this ACT.")
     else:
         st.session_state.search_request = {
             "scenario_id": selected_scenario,
             "query": cleaned_query or None,
             "limit": int(limit),
+            "engine": selected_service,
         }
 
 if st.session_state.search_request:
     request = st.session_state.search_request
-    render_scenario(request["scenario_id"], request["query"], request["limit"])
+    render_scenario(request["scenario_id"], request["query"], request["limit"], request.get("engine", "all"))
 else:
     st.info("Enter a query, choose an ACT, then press Search.")
 

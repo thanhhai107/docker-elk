@@ -79,9 +79,10 @@ def run_scenario(
     scenario_id: str,
     q: str | None = None,
     limit: int = Query(10, ge=1, le=50),
+    engine: Literal["all", "elasticsearch", "meilisearch", "postgres"] = "all",
 ) -> dict[str, Any]:
     try:
-        return WorkflowService().run(scenario_id, q, limit)
+        return WorkflowService().run(scenario_id, q, limit, engine)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown scenario: {scenario_id}") from exc
 

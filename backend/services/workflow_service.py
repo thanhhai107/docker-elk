@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import meilisearch
 import psycopg
@@ -95,6 +95,7 @@ SCENARIOS: dict[str, dict[str, Any]] = {
 }
 
 BENCHMARK_ORDER = list(SCENARIOS)
+SearchEngine = Literal["all", "elasticsearch", "meilisearch", "postgres"]
 
 POSITIVE_REVIEW_TERMS = {"good", "great", "excellent", "easy", "quality", "works well", "install"}
 
@@ -114,7 +115,13 @@ class WorkflowService:
             "scale_test_queries": SCALE_TEST_QUERIES,
         }
 
-    def run(self, scenario_id: str, query: str | None = None, limit: int = 10) -> dict[str, Any]:
+    def run(
+        self,
+        scenario_id: str,
+        query: str | None = None,
+        limit: int = 10,
+        engine: SearchEngine = "all",
+    ) -> dict[str, Any]:
         if scenario_id not in SCENARIOS:
             raise KeyError(scenario_id)
         scenario = SCENARIOS[scenario_id]
@@ -125,22 +132,27 @@ class WorkflowService:
             ("meilisearch", getattr(self, f"_meili_{suffix}")),
             ("postgres", getattr(self, f"_pg_{suffix}")),
         ]
+        selected_engine = engine
+        if selected_engine != "all":
+            runners = [(name, runner) for name, runner in runners if name == selected_engine]
+
         results = []
-        for engine, runner in runners:
+        for runner_engine, runner in runners:
             started = perf_counter()
             try:
                 result = runner(selected_query, limit)
                 result["took_ms"] = round((perf_counter() - started) * 1000, 2)
             except Exception as exc:
-                result = self._error_result(engine, exc)
+                result = self._error_result(runner_engine, exc)
             results.append(result)
         return {
             "scenario_id": scenario_id,
             "title": scenario["title"],
             "summary": scenario["summary"],
             "query": selected_query,
-            "winner": "elasticsearch",
-            "winner_reason": self._winner_reason(scenario_id),
+            "engine": selected_engine,
+            "winner": "elasticsearch" if selected_engine == "all" else None,
+            "winner_reason": self._winner_reason(scenario_id) if selected_engine == "all" else None,
             "results": results,
         }
 
