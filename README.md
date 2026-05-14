@@ -126,7 +126,8 @@ cd /opt/nexus/docker-elk
 docker compose exec -T backend python scripts/ingest_all.py --reset
 ```
 
-This command resets and ingests the sample products and reviews into:
+This command resets and ingests up to 2,000,000 products and 200,000 reviews
+from the selected data files into:
 
 ```text
 Elasticsearch
@@ -159,14 +160,14 @@ data/raw/Electronics.jsonl.gz
 ### Ingest real data
 
 ```bash
-docker compose exec -T backend python scripts/ingest_all.py --reset --product-limit 50000 --review-limit 50000
+docker compose exec -T backend python scripts/ingest_all.py --reset
 ```
 
 The ingest script selects data in file order:
 
-- `--product-limit 50000`: the first 50,000 valid products from
+- `--product-limit 2000000`: the first 2,000,000 valid products from
   `data/raw/meta_Electronics.jsonl.gz`.
-- `--review-limit 50000`: the first 50,000 valid reviews from
+- `--review-limit 200000`: the first 200,000 valid reviews from
   `data/raw/Electronics.jsonl.gz` whose `parent_asin` or `asin` matches one of
   the selected products.
 
