@@ -7,6 +7,7 @@ from typing import Any
 import meilisearch
 import psycopg
 from elasticsearch import Elasticsearch, helpers
+from elasticsearch.helpers import BulkIndexError
 
 from backend.config import settings
 from backend.ingest.load_products import load_products
@@ -53,13 +54,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--product-limit", type=int, default=5000)
     parser.add_argument("--review-limit", type=int, default=20000)
     parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Ingest every product and review found in the selected input files.",
+    )
+    parser.add_argument(
         "--engine",
         choices=["all", "elasticsearch", "meilisearch", "postgres"],
         default="all",
         help="Choose one engine to ingest, or all engines.",
     )
     parser.add_argument("--reset", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.all:
+        args.product_limit = None
+        args.review_limit = None
+    return args
 
 
 def default_path(*candidates: Path) -> Path:
@@ -163,7 +173,7 @@ def ingest_elasticsearch(products: list[dict[str, Any]], reset: bool) -> None:
         for product in products
     ]
     if actions:
-        helpers.bulk(client.options(request_timeout=120), actions, chunk_size=1000)
+        run_bulk(client, actions, "Elasticsearch products")
     client.indices.refresh(index="amazon_electronics_products")
 
 
@@ -175,8 +185,18 @@ def ingest_elasticsearch_reviews(reviews: list[dict[str, Any]], known_products: 
         if review["product_id"] in known_products
     ]
     if actions:
-        helpers.bulk(client.options(request_timeout=120), actions, chunk_size=1000)
+        run_bulk(client, actions, "Elasticsearch reviews")
     client.indices.refresh(index="amazon_electronics_reviews")
+
+
+def run_bulk(client: Elasticsearch, actions: list[dict[str, Any]], label: str) -> None:
+    try:
+        helpers.bulk(client.options(request_timeout=120), actions, chunk_size=1000)
+    except BulkIndexError as exc:
+        print(f"{label} failed: {len(exc.errors)} bulk item errors")
+        for error in exc.errors[:5]:
+            print(error)
+        raise
 
 
 def ingest_meilisearch(products: list[dict[str, Any]], reset: bool) -> None:
