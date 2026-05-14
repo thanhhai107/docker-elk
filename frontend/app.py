@@ -33,25 +33,6 @@ def clean_highlight(value: str) -> str:
     return unescape(value or "").replace("<em>", "<mark>").replace("</em>", "</mark>")
 
 
-def scenario_metadata() -> dict[str, Any]:
-    try:
-        return get_json("/scenarios")
-    except requests.RequestException:
-        return {
-            "scenarios": {},
-            "query_options": [
-                "wireless noise cancelling headphones",
-                "iphne charger fast charging",
-                "bluetooth speaker bass",
-                "battery drains fast",
-                "overheating problem",
-                "I need headphones for online meetings with good battery and noise cancellation",
-                "worker failover scale resilience",
-                "usb c charger fast charging",
-            ],
-        }
-
-
 def render_hit(hit: dict[str, Any], document_type: str) -> None:
     highlights = hit.get("highlights", {})
     title = clean_highlight((highlights.get("title") or [hit.get("title", "")])[0])
@@ -175,20 +156,40 @@ def describe_engine(engine: dict[str, Any]) -> str:
 st.set_page_config(page_title="Amazon Electronics Search Demo", layout="wide")
 st.title("Amazon Electronics Search Demo")
 
-metadata = scenario_metadata()
-query_options = metadata["query_options"]
+scenario_labels = {label: scenario_id for scenario_id, label in SCENARIO_TABS}
 
-with st.sidebar:
-    st.header("Demo Controls")
-    use_defaults = st.checkbox("Use scenario default query", value=True)
-    selected_query = st.selectbox("Query", query_options)
-    limit = st.slider("Results per engine", 3, 20, 10)
+if "search_request" not in st.session_state:
+    st.session_state.search_request = None
 
-tabs = st.tabs([label for _, label in SCENARIO_TABS] + ["Benchmark Report"])
+with st.form("search_form"):
+    search_col, act_col, limit_col, button_col = st.columns([5, 2.4, 1.2, 1])
+    with search_col:
+        query = st.text_input("Search query", placeholder="Type your product need, review problem, or analytics keyword")
+    with act_col:
+        selected_label = st.selectbox("Act", list(scenario_labels))
+    with limit_col:
+        limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1)
+    with button_col:
+        st.write("")
+        submitted = st.form_submit_button("Search", use_container_width=True)
 
-for tab, (scenario_id, _label) in zip(tabs, SCENARIO_TABS):
-    with tab:
-        render_scenario(scenario_id, None if use_defaults else selected_query, limit)
+if submitted:
+    selected_scenario = scenario_labels[selected_label]
+    cleaned_query = query.strip()
+    if not cleaned_query and selected_scenario not in {"act-3-review-analytics", "act-5-scale-readiness"}:
+        st.warning("Enter a query before searching this ACT.")
+    else:
+        st.session_state.search_request = {
+            "scenario_id": selected_scenario,
+            "query": cleaned_query or None,
+            "limit": int(limit),
+        }
 
-with tabs[-1]:
-    render_benchmark(limit)
+if st.session_state.search_request:
+    request = st.session_state.search_request
+    render_scenario(request["scenario_id"], request["query"], request["limit"])
+else:
+    st.info("Enter a query, choose an ACT, then press Search.")
+
+with st.expander("Benchmark Report", expanded=False):
+    render_benchmark(10)
