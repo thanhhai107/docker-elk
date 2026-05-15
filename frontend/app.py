@@ -19,10 +19,10 @@ SERVICE_LABELS = {
     **ENGINE_LABELS,
 }
 SCENARIO_TABS = [
-    ("act-1-product-discovery", "ACT 1: Product Discovery Search"),
+    ("act-1-product-discovery", "ACT 1: Keyword Product Search"),
     ("act-2-review-deep-search", "ACT 2: Review Deep Search"),
     ("act-3-review-analytics", "ACT 3: Review Analytics & Aggregation"),
-    ("act-4-hybrid-recommendation", "ACT 4: Hybrid / Semantic Recommendation"),
+    ("act-4-hybrid-recommendation", "ACT 4: Semantic Recommendation"),
 ]
 
 
@@ -38,9 +38,10 @@ def clean_highlight(value: str) -> str:
 
 def render_hit(hit: dict[str, Any], document_type: str) -> None:
     highlights = hit.get("highlights", {})
-    title = clean_highlight((highlights.get("title") or [hit.get("title", "")])[0])
-    body_key = "text" if document_type == "review" else "description"
-    body = clean_highlight((highlights.get(body_key) or [hit.get(body_key, "")])[0])
+    title_key = "review_title" if document_type == "review" else "title"
+    title = clean_highlight((highlights.get(title_key) or highlights.get("title") or [hit.get(title_key, hit.get("title", ""))])[0])
+    body_key = "review_text" if document_type == "review" else "description"
+    body = clean_highlight((highlights.get(body_key) or highlights.get("text") or [hit.get(body_key, hit.get("text", ""))])[0])
 
     st.markdown(f"**{title or hit.get('product_id') or hit.get('review_id')}**", unsafe_allow_html=True)
     if document_type == "review":
@@ -101,7 +102,12 @@ def render_scenario(scenario_id: str, selected_query: str | None, limit: int, en
         return
 
     st.markdown(f"**Query:** `{data['query']}`")
+    st.markdown(f"**Flow:** {data.get('flow_name', data.get('title', ''))}")
     st.caption(data.get("summary", ""))
+    detail_cols = st.columns(3)
+    detail_cols[0].markdown(f"**Người dùng làm gì?**  \n{data.get('user_action', '')}")
+    detail_cols[1].markdown(f"**Mục tiêu demo**  \n{data.get('demo_goal', '')}")
+    detail_cols[2].markdown(f"**Điểm khác biệt**  \n{data.get('difference', '')}")
     if data.get("winner_reason"):
         st.info(f"Winner: Elasticsearch. {data['winner_reason']}")
 

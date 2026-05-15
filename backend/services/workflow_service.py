@@ -39,57 +39,55 @@ RECOMMENDATION_QUERIES = [
     "I want a bluetooth speaker with strong bass for a small room",
 ]
 
-SCALE_TEST_CASES = (
-    [{"type": "product", "query": query} for query in PRODUCT_DISCOVERY_QUERIES]
-    + [{"type": "review", "query": query} for query in REVIEW_DEEP_SEARCH_QUERIES[:3]]
-    + [{"type": "recommendation", "query": query} for query in RECOMMENDATION_QUERIES]
-)
-SCALE_TEST_QUERIES = [item["query"] for item in SCALE_TEST_CASES]
-
-QUERY_OPTIONS = PRODUCT_DISCOVERY_QUERIES + REVIEW_DEEP_SEARCH_QUERIES + RECOMMENDATION_QUERIES + [
-    "worker failover scale resilience"
-]
+QUERY_OPTIONS = PRODUCT_DISCOVERY_QUERIES + REVIEW_DEEP_SEARCH_QUERIES + RECOMMENDATION_QUERIES
 
 SCENARIOS: dict[str, dict[str, Any]] = {
     "act-1-product-discovery": {
-        "title": "ACT 1: Product Discovery Search",
+        "title": "ACT 1: Keyword Product Search",
+        "flow_name": "Keyword Product Search",
         "default_query": PRODUCT_DISCOVERY_QUERIES[0],
+        "user_action": "Tìm sản phẩm bằng keyword chưa hoàn hảo",
+        "demo_goal": "Tìm đúng product dù query sai chính tả, thiếu từ, hoặc dùng từ gần nghĩa.",
+        "difference": "Show fuzzy search, field boosting, ranking theo title / features / description.",
         "summary": (
-            "Users search electronics with imperfect keywords. Elasticsearch uses boosted "
-            "multi_match plus fuzziness, Meilisearch uses search plus filters, and PostgreSQL "
-            "uses full-text search."
+            "Keyword product search for imperfect user queries. Elasticsearch demonstrates fuzzy "
+            "search, boosted product fields, and flexible ranking across title, features, and description."
         ),
     },
     "act-2-review-deep-search": {
         "title": "ACT 2: Review Deep Search",
+        "flow_name": "Review Deep Search",
         "default_query": REVIEW_DEEP_SEARCH_QUERIES[0],
+        "user_action": "Tìm sâu trong nội dung review",
+        "demo_goal": "Tìm review cụ thể nói về vấn đề hoặc trải nghiệm của người dùng.",
+        "difference": "Search trên review_title / review_text, có highlight, filter theo sentiment, rating, helpful_vote.",
         "summary": (
-            "Deep search over review summary/text with snippets. Negative queries filter "
-            "rating <= 3; positive queries filter rating >= 4; helpful votes are used as a tie-breaker."
+            "Deep review search over logical review_title/review_text fields with snippets, rating "
+            "filters, sentiment routing, and helpful_vote sorting."
         ),
     },
     "act-3-review-analytics": {
         "title": "ACT 3: Review Analytics & Aggregation",
+        "flow_name": "Review Analytics & Aggregation",
         "default_query": "overheating",
+        "user_action": "Search một chủ đề rồi tổng hợp insight",
+        "demo_goal": "Trả lời kiểu vấn đề này phổ biến ở brand/category nào, rating phân bổ ra sao.",
+        "difference": "Elasticsearch mạnh vì có search + aggregation/facet trong cùng engine; Meilisearch/Postgres thường cần xử lý thêm ở app hoặc SQL.",
         "summary": (
-            "Answers brand/category/rating analytics questions. Elasticsearch combines text "
-            "query and aggregations in one engine; Meilisearch uses an app-side aggregation fallback."
+            "Review analytics workflow for turning a topic into brand/category/rating insights. "
+            "Elasticsearch combines search, aggregation, and facets inside one engine."
         ),
     },
     "act-4-hybrid-recommendation": {
-        "title": "ACT 4: Hybrid / Semantic Product Recommendation Search",
+        "title": "ACT 4: Semantic Recommendation",
+        "flow_name": "Semantic Recommendation",
         "default_query": RECOMMENDATION_QUERIES[0],
+        "user_action": "Nhập nhu cầu tự nhiên, dài hơn keyword",
+        "demo_goal": "Gợi ý sản phẩm phù hợp dựa trên intent, product fields, review evidence, rating.",
+        "difference": "Show khác biệt giữa keyword search truyền thống và search/recommendation thông minh.",
         "summary": (
-            "Natural-language recommendation search. Elasticsearch combines intent-oriented "
-            "multi-field matching, fuzzy matching, review text and business signals in one query."
-        ),
-    },
-    "act-5-scale-readiness": {
-        "title": "ACT 5: Worker Failover / Scale Resilience",
-        "default_query": "worker failover scale resilience",
-        "summary": (
-            "Checks whether search can continue when 1-2 worker nodes are offline. Elasticsearch "
-            "is evaluated through cluster health, shard/replica allocation, and live top-10 queries."
+            "Semantic recommendation workflow for natural-language needs. Elasticsearch blends "
+            "intent expansion, product fields, review evidence, and rating/review signals."
         ),
     },
 }
@@ -112,7 +110,6 @@ class WorkflowService:
             "product_discovery_queries": PRODUCT_DISCOVERY_QUERIES,
             "review_deep_search_queries": REVIEW_DEEP_SEARCH_QUERIES,
             "recommendation_queries": RECOMMENDATION_QUERIES,
-            "scale_test_queries": SCALE_TEST_QUERIES,
         }
 
     def run(
@@ -148,6 +145,10 @@ class WorkflowService:
         return {
             "scenario_id": scenario_id,
             "title": scenario["title"],
+            "flow_name": scenario["flow_name"],
+            "user_action": scenario["user_action"],
+            "demo_goal": scenario["demo_goal"],
+            "difference": scenario["difference"],
             "summary": scenario["summary"],
             "query": selected_query,
             "engine": selected_engine,
@@ -634,235 +635,6 @@ class WorkflowService:
             score=3,
         )
 
-    def _es_act_5_scale_readiness(self, query: str, limit: int) -> dict[str, Any]:
-        runs = []
-        for case in SCALE_TEST_CASES:
-            sample = case["query"]
-            is_review = case["type"] == "review"
-            started = perf_counter()
-            response = self.es.search(
-                index=REVIEW_INDEX if is_review else PRODUCT_INDEX,
-                body={
-                    "size": limit,
-                    "query": {
-                        "multi_match": {
-                            "query": sample if is_review else self._expand_intent(sample),
-                            "fields": ["title^2", "text"] if is_review else ["title^5", "features^3", "description^2", "review_text"],
-                            "fuzziness": "AUTO",
-                        }
-                    },
-                    "track_total_hits": False,
-                },
-            )
-            runs.append(
-                {
-                    "type": case["type"],
-                    "query": sample,
-                    "took_ms": round((perf_counter() - started) * 1000, 2),
-                    "engine_took_ms": response.get("took"),
-                    "top_10_count": len(response.get("hits", {}).get("hits", [])),
-                }
-            )
-        stats = self._latency_stats(runs)
-        try:
-            index_stats = self.es.indices.stats(index=f"{PRODUCT_INDEX},{REVIEW_INDEX}", metric="docs,store")
-            index_settings = self.es.indices.get_settings(index=f"{PRODUCT_INDEX},{REVIEW_INDEX}")
-            cluster = self.es.cluster.health()
-            allocation = self.es.cat.shards(index=f"{PRODUCT_INDEX},{REVIEW_INDEX}", format="json")
-            shard_states = Counter(str(item.get("state", "unknown")).lower() for item in allocation)
-            replica_summary = {
-                "primary_shards": sum(1 for item in allocation if item.get("prirep") == "p"),
-                "replica_shards": sum(1 for item in allocation if item.get("prirep") == "r"),
-                "started_shards": shard_states.get("started", 0),
-                "unassigned_shards": shard_states.get("unassigned", 0),
-                "initializing_shards": shard_states.get("initializing", 0),
-                "relocating_shards": shard_states.get("relocating", 0),
-            }
-            query_success = all(item["top_10_count"] >= 0 for item in runs)
-            configured_replicas = {
-                name: int(item.get("settings", {}).get("index", {}).get("number_of_replicas", 0))
-                for name, item in index_settings.items()
-            }
-            can_serve_with_missing_workers = (
-                query_success
-                and cluster.get("status") in {"green", "yellow"}
-                and int(cluster.get("active_primary_shards") or 0) > 0
-            )
-            one_worker_failover_ready = can_serve_with_missing_workers and all(
-                replicas >= 1 for replicas in configured_replicas.values()
-            )
-            two_worker_failover_ready = can_serve_with_missing_workers and all(
-                replicas >= 2 for replicas in configured_replicas.values()
-            )
-            scale_metadata = {
-                "cluster_status": cluster.get("status"),
-                "number_of_nodes": cluster.get("number_of_nodes"),
-                "active_primary_shards": cluster.get("active_primary_shards"),
-                "active_shards": cluster.get("active_shards"),
-                "unassigned_shards": cluster.get("unassigned_shards"),
-                "delayed_unassigned_shards": cluster.get("delayed_unassigned_shards"),
-                "shard_summary": replica_summary,
-                "can_continue_serving_queries": can_serve_with_missing_workers,
-                "configured_replicas": configured_replicas,
-                "one_worker_failover_ready": one_worker_failover_ready,
-                "two_worker_failover_ready": two_worker_failover_ready,
-                "manual_failover_test": [
-                    "Start with all Elasticsearch nodes online and ingest data with number_of_replicas >= 2.",
-                    "Stop one worker node, then run this ACT 5 endpoint again.",
-                    "Stop a second worker node, then run this ACT 5 endpoint again.",
-                    "Pass condition: product/review queries still return top-10 results and cluster status is green or yellow.",
-                    "Fail condition: red cluster status, missing primaries, or search errors.",
-                ],
-                "indices": {
-                    name: {
-                        "docs": item.get("total", {}).get("docs", {}).get("count"),
-                        "store_bytes": item.get("total", {}).get("store", {}).get("size_in_bytes"),
-                    }
-                    for name, item in index_stats.get("indices", {}).items()
-                },
-            }
-        except Exception as exc:
-            scale_metadata = {"stats_error": str(exc)}
-        return {
-            "engine": "elasticsearch",
-            "document_type": "scale",
-            "number_of_requests": len(SCALE_TEST_QUERIES) + 4,
-            "total": sum(item["top_10_count"] for item in runs),
-            "hits": [],
-            "aggregations": {"latency": stats, "runs": runs, "scale_metadata": scale_metadata},
-            "has_highlight": False,
-            "has_aggregation": True,
-            "has_custom_ranking": True,
-            "backend_complexity": "Low",
-            "note": (
-                "Elasticsearch is the right fit for worker failover when indices have replicas: if 1-2 worker "
-                "nodes go offline, remaining nodes can keep serving searches from active primary/replica shards. "
-                "A yellow cluster can still serve search; red means at least one primary shard is unavailable."
-            ),
-            "scorecard": {"overall": 5},
-        }
-
-    def _meili_act_5_scale_readiness(self, query: str, limit: int) -> dict[str, Any]:
-        runs = []
-        for case in SCALE_TEST_CASES:
-            sample = case["query"]
-            is_review = case["type"] == "review"
-            index = self.meili.index(REVIEW_INDEX if is_review else PRODUCT_INDEX)
-            started = perf_counter()
-            response = index.search(
-                sample if is_review else self._expand_intent(sample),
-                {
-                    "limit": limit,
-                    "filter": "rating >= 0" if is_review else "average_rating >= 0",
-                    "showRankingScore": True,
-                },
-            )
-            runs.append(
-                {
-                    "type": case["type"],
-                    "query": sample,
-                    "took_ms": round((perf_counter() - started) * 1000, 2),
-                    "engine_processing_ms": response.get("processingTimeMs"),
-                    "top_10_count": len(response.get("hits", [])),
-                }
-            )
-        stats = self._latency_stats(runs)
-        try:
-            meili_stats = self.meili.get_stats()
-            scale_metadata = {
-                "database_size": getattr(meili_stats, "database_size", None),
-                "last_update": getattr(meili_stats, "last_update", None),
-                "indexes": getattr(meili_stats, "indexes", None),
-            }
-        except Exception as exc:
-            scale_metadata = {"stats_error": str(exc)}
-        return {
-            "engine": "meilisearch",
-            "document_type": "scale",
-            "number_of_requests": len(SCALE_TEST_QUERIES) + 1,
-            "total": sum(item["top_10_count"] for item in runs),
-            "hits": [],
-            "aggregations": {"latency": stats, "runs": runs, "scale_metadata": scale_metadata},
-            "has_highlight": False,
-            "has_aggregation": False,
-            "has_custom_ranking": False,
-            "backend_complexity": "Low",
-            "note": (
-                "In this docker-compose demo, Meilisearch runs as one service. If that service is offline, "
-                "search is offline unless you add an external HA/replication strategy outside this stack."
-            ),
-            "scorecard": {"overall": 4},
-        }
-
-    def _pg_act_5_scale_readiness(self, query: str, limit: int) -> dict[str, Any]:
-        product_sql = """
-            WITH q AS (
-                SELECT websearch_to_tsquery('english', %s) AS tsq, %s::text AS raw_query
-            )
-            SELECT product_id, title,
-                   ts_rank_cd(search_vector, q.tsq) + similarity(title, q.raw_query) AS score
-            FROM products, q
-            WHERE search_vector @@ q.tsq
-               OR title %% q.raw_query
-               OR description %% q.raw_query
-            ORDER BY score DESC
-            LIMIT %s
-        """
-        review_sql = """
-            WITH q AS (
-                SELECT websearch_to_tsquery('english', %s) AS tsq
-            )
-            SELECT review_id, title,
-                   ts_rank_cd(review_vector, q.tsq) AS score
-            FROM reviews, q
-            WHERE review_vector @@ q.tsq
-            ORDER BY score DESC, helpful_vote DESC
-            LIMIT %s
-        """
-        runs = []
-        with psycopg.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
-            for case in SCALE_TEST_CASES:
-                sample = case["query"]
-                started = perf_counter()
-                if case["type"] == "review":
-                    hits = conn.execute(review_sql, [sample, limit]).fetchall()
-                else:
-                    expanded = self._expand_intent(sample)
-                    hits = conn.execute(product_sql, [expanded, expanded, limit]).fetchall()
-                runs.append(
-                    {
-                        "type": case["type"],
-                        "query": sample,
-                        "took_ms": round((perf_counter() - started) * 1000, 2),
-                        "top_10_count": len(hits),
-                    }
-                )
-            metadata = conn.execute(
-                """
-                SELECT
-                    (SELECT count(*) FROM products) AS product_count,
-                    (SELECT count(*) FROM reviews) AS review_count,
-                    pg_database_size(current_database()) AS database_bytes
-                """
-            ).fetchone()
-        return {
-            "engine": "postgres",
-            "document_type": "scale",
-            "number_of_requests": len(SCALE_TEST_QUERIES) + 1,
-            "total": sum(item["top_10_count"] for item in runs),
-            "hits": [],
-            "aggregations": {"latency": self._latency_stats(runs), "runs": runs, "scale_metadata": metadata},
-            "has_highlight": False,
-            "has_aggregation": True,
-            "has_custom_ranking": True,
-            "backend_complexity": "Medium",
-            "note": (
-                "In this docker-compose demo, PostgreSQL runs as one primary database service. It can be made HA "
-                "with replicas/failover tooling, but that is separate from the current stack and not search-native."
-            ),
-            "scorecard": {"overall": 3},
-        }
-
     def _review_rating_filter(self, query: str) -> tuple[dict[str, int], str]:
         is_positive = any(term in query.lower() for term in POSITIVE_REVIEW_TERMS)
         if is_positive:
@@ -1003,6 +775,7 @@ class WorkflowService:
             formatted = item.pop("_formatted", {})
             item["score"] = item.pop("_rankingScore", None)
             item["highlights"] = {key: [value] for key, value in formatted.items() if isinstance(value, str)}
+            self._add_review_aliases(item)
             hits.append(item)
         return {
             "engine": "meilisearch",
@@ -1051,6 +824,7 @@ class WorkflowService:
         source = dict(item["_source"])
         source["score"] = item.get("_score")
         source["highlights"] = item.get("highlight", {})
+        self._add_review_aliases(source)
         return source
 
     def _pg_hit(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -1062,7 +836,22 @@ class WorkflowService:
             if value:
                 highlights[field] = [value]
         hit["highlights"] = highlights
+        self._add_review_aliases(hit)
         return hit
+
+    def _add_review_aliases(self, hit: dict[str, Any]) -> None:
+        if "review_id" not in hit:
+            return
+        if "review_title" not in hit:
+            hit["review_title"] = hit.get("title", "")
+        if "review_text" not in hit:
+            hit["review_text"] = hit.get("text", "")
+        highlights = hit.get("highlights") or {}
+        if "title" in highlights and "review_title" not in highlights:
+            highlights["review_title"] = highlights["title"]
+        if "text" in highlights and "review_text" not in highlights:
+            highlights["review_text"] = highlights["text"]
+        hit["highlights"] = highlights
 
     def _es_aggs(self, aggs: dict[str, Any]) -> dict[str, Any]:
         output = {}
@@ -1102,7 +891,13 @@ class WorkflowService:
         snippets = []
         for hit in hits[:10]:
             highlights = hit.get("highlights", {})
-            text = (highlights.get("text") or highlights.get("title") or [hit.get("text", "")])[0]
+            text = (
+                highlights.get("review_text")
+                or highlights.get("text")
+                or highlights.get("review_title")
+                or highlights.get("title")
+                or [hit.get("review_text", hit.get("text", ""))]
+            )[0]
             snippets.append(
                 {
                     "review_id": hit.get("review_id"),
@@ -1133,7 +928,6 @@ class WorkflowService:
             "act-2-review-deep-search": "Elasticsearch returns deep review matches with highlights, rating filters and helpful-vote tie-break sorting in one request.",
             "act-3-review-analytics": "Elasticsearch combines text search and aggregations in the same engine without app-side fallback.",
             "act-4-hybrid-recommendation": "Elasticsearch supports intent expansion, boosted fields, review evidence and business scoring in one relevance model.",
-            "act-5-scale-readiness": "Elasticsearch is strongest for worker failover because replicas let remaining nodes serve search when 1-2 workers are offline.",
         }
         return reasons[scenario_id]
 

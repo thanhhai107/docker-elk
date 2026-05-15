@@ -70,6 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--es-bulk-chunk-size", type=int, default=250)
     parser.add_argument("--es-request-timeout", type=int, default=300)
     parser.add_argument("--es-max-retries", type=int, default=3)
+    parser.add_argument("--meili-chunk-size", type=int, default=5000)
     parser.add_argument(
         "--all",
         action="store_true",
@@ -330,7 +331,7 @@ def run_bulk(
         raise
 
 
-def ingest_meilisearch(products: list[dict[str, Any]], reset: bool) -> None:
+def ingest_meilisearch(products: list[dict[str, Any]], reset: bool, chunk_size: int) -> None:
     started_at = time.perf_counter()
     client = meilisearch.Client(settings.meili_url, settings.meili_master_key)
     if reset:
@@ -350,15 +351,15 @@ def ingest_meilisearch(products: list[dict[str, Any]], reset: bool) -> None:
     products_index = client.index("amazon_electronics_products")
     log(f"Meilisearch products: indexing {len(products)} docs")
     processed = 0
-    for index, chunk in enumerate(chunks(products, 1000), start=1):
+    for index, chunk in enumerate(chunks(products, chunk_size), start=1):
         task = products_index.add_documents(chunk, primary_key="product_id")
         wait_task(client, task)
         processed += len(chunk)
-        log_progress("Meilisearch products", index, len(chunk), len(products), 1000, processed=processed)
+        log_progress("Meilisearch products", index, len(chunk), len(products), chunk_size, processed=processed)
     log_done("Meilisearch products ingest", started_at)
 
 
-def ingest_meilisearch_reviews(reviews: list[dict[str, Any]], known_products: set[str]) -> None:
+def ingest_meilisearch_reviews(reviews: list[dict[str, Any]], known_products: set[str], chunk_size: int) -> None:
     started_at = time.perf_counter()
     client = meilisearch.Client(settings.meili_url, settings.meili_master_key)
     review_docs = [review for review in reviews if review["product_id"] in known_products]
@@ -368,11 +369,11 @@ def ingest_meilisearch_reviews(reviews: list[dict[str, Any]], known_products: se
     reviews_index = client.index("amazon_electronics_reviews")
     log(f"Meilisearch reviews: indexing {len(review_docs)} docs")
     processed = 0
-    for index, chunk in enumerate(chunks(review_docs, 1000), start=1):
+    for index, chunk in enumerate(chunks(review_docs, chunk_size), start=1):
         task = reviews_index.add_documents(chunk, primary_key="review_id")
         wait_task(client, task)
         processed += len(chunk)
-        log_progress("Meilisearch reviews", index, len(chunk), len(review_docs), 1000, processed=processed)
+        log_progress("Meilisearch reviews", index, len(chunk), len(review_docs), chunk_size, processed=processed)
     log_done("Meilisearch reviews ingest", started_at)
 
 
@@ -453,6 +454,7 @@ def main() -> int:
         f"request_timeout={args.es_request_timeout}, "
         f"max_retries={args.es_max_retries}"
     )
+    log(f"Meilisearch chunk_size={args.meili_chunk_size}")
 
     if args.engine in {"all", "postgres"}:
         log("Ingesting PostgreSQL...")
@@ -478,9 +480,9 @@ def main() -> int:
 
     if args.engine in {"all", "meilisearch"}:
         log("Ingesting Meilisearch products...")
-        ingest_meilisearch(products, args.reset)
+        ingest_meilisearch(products, args.reset, args.meili_chunk_size)
         log("Ingesting Meilisearch reviews...")
-        ingest_meilisearch_reviews(enriched_reviews, known_products)
+        ingest_meilisearch_reviews(enriched_reviews, known_products, args.meili_chunk_size)
 
     log_done("Ingest", started_at)
     log("Ingest complete")
