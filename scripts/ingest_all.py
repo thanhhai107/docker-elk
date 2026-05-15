@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,12 +49,25 @@ REVIEW_COLUMNS = [
 ]
 
 
+def log(message: str) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[{timestamp}] {message}", flush=True)
+
+
+def log_done(label: str, started_at: float) -> None:
+    log(f"{label} complete in {time.perf_counter() - started_at:.1f}s")
+
+
+def format_limit(limit: int | None) -> str:
+    return "all (--all)" if limit is None else str(limit)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest products and reviews into all search engines.")
     parser.add_argument("--products", type=Path, default=None, help="Product JSONL/GZ path.")
     parser.add_argument("--reviews", type=Path, default=None, help="Review JSONL/GZ path.")
-    parser.add_argument("--product-limit", type=int, default=100_000)
-    parser.add_argument("--review-limit", type=int, default=100_000)
+    parser.add_argument("--product-limit", type=int, default=100_000, help="Max products to ingest. Default: 100000.")
+    parser.add_argument("--review-limit", type=int, default=100_000, help="Max matching reviews to ingest. Default: 100000.")
     parser.add_argument("--es-bulk-chunk-size", type=int, default=250)
     parser.add_argument("--es-request-timeout", type=int, default=300)
     parser.add_argument("--es-max-retries", type=int, default=3)
@@ -148,24 +163,31 @@ def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]
         VALUES ({", ".join(["%s"] * len(REVIEW_COLUMNS))})
         ON CONFLICT (review_id) DO NOTHING
     """
+    started_at = time.perf_counter()
+    log("PostgreSQL: ensuring schema")
     ensure_postgres_schema()
     with psycopg.connect(settings.postgres_dsn) as conn:
         if reset:
+            log("PostgreSQL: reset requested, truncating reviews and products")
             conn.execute("TRUNCATE TABLE reviews, products RESTART IDENTITY")
-        with conn.cursor() as cur:
-            cur.executemany(
-                product_sql,
-                [[product.get(column) for column in PRODUCT_COLUMNS] for product in products],
-            )
+        product_rows = [[product.get(column) for column in PRODUCT_COLUMNS] for product in products]
+        log(f"PostgreSQL: inserting/upserting {len(product_rows)} products")
+        for index, chunk in enumerate(chunks(product_rows, 5000), start=1):
+            with conn.cursor() as cur:
+                cur.executemany(product_sql, chunk)
+            log_progress("PostgreSQL products", index, len(chunk), len(product_rows), 5000)
         known_products = {product["product_id"] for product in products}
         review_rows = [
             [review.get(column) for column in REVIEW_COLUMNS]
             for review in reviews
             if review["product_id"] in known_products
         ]
-        if review_rows:
+        log(f"PostgreSQL: inserting {len(review_rows)} reviews")
+        for index, chunk in enumerate(chunks(review_rows, 5000), start=1):
             with conn.cursor() as cur:
-                cur.executemany(review_sql, review_rows)
+                cur.executemany(review_sql, chunk)
+            log_progress("PostgreSQL reviews", index, len(chunk), len(review_rows), 5000)
+    log_done("PostgreSQL ingest", started_at)
 
 
 def ingest_elasticsearch(
@@ -175,15 +197,20 @@ def ingest_elasticsearch(
     request_timeout: int,
     max_retries: int,
 ) -> None:
+    started_at = time.perf_counter()
+    log(f"Elasticsearch products: creating indices reset={reset}")
     create_indices(reset=reset)
     client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
     actions = [
         {"_index": "amazon_electronics_products", "_id": product["product_id"], "_source": product}
         for product in products
     ]
+    log(f"Elasticsearch products: indexing {len(actions)} docs")
     if actions:
         run_bulk(client, actions, "Elasticsearch products", chunk_size, request_timeout, max_retries)
+    log("Elasticsearch products: refreshing index")
     client.indices.refresh(index="amazon_electronics_products")
+    log_done("Elasticsearch products ingest", started_at)
 
 
 def ingest_elasticsearch_reviews(
@@ -193,15 +220,19 @@ def ingest_elasticsearch_reviews(
     request_timeout: int,
     max_retries: int,
 ) -> None:
+    started_at = time.perf_counter()
     client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
     actions = [
         {"_index": "amazon_electronics_reviews", "_id": review["review_id"], "_source": review}
         for review in reviews
         if review["product_id"] in known_products
     ]
+    log(f"Elasticsearch reviews: indexing {len(actions)} docs")
     if actions:
         run_bulk(client, actions, "Elasticsearch reviews", chunk_size, request_timeout, max_retries)
+    log("Elasticsearch reviews: refreshing index")
     client.indices.refresh(index="amazon_electronics_reviews")
+    log_done("Elasticsearch reviews ingest", started_at)
 
 
 def run_bulk(
@@ -213,54 +244,90 @@ def run_bulk(
     max_retries: int,
 ) -> None:
     try:
-        helpers.bulk(
-            client.options(request_timeout=request_timeout),
-            actions,
-            chunk_size=chunk_size,
-            max_retries=max_retries,
-            initial_backoff=2,
-            max_backoff=30,
-            retry_on_status=(429, 502, 503, 504),
-            request_timeout=request_timeout,
-        )
+        total = len(actions)
+        indexed = 0
+        for index, chunk in enumerate(chunks(actions, chunk_size), start=1):
+            helpers.bulk(
+                client.options(request_timeout=request_timeout),
+                chunk,
+                chunk_size=chunk_size,
+                max_retries=max_retries,
+                initial_backoff=2,
+                max_backoff=30,
+                retry_on_status=(429, 502, 503, 504),
+                request_timeout=request_timeout,
+            )
+            indexed += len(chunk)
+            log_progress(label, index, len(chunk), total, chunk_size, processed=indexed)
     except BulkIndexError as exc:
-        print(f"{label} failed: {len(exc.errors)} bulk item errors")
+        log(f"{label} failed: {len(exc.errors)} bulk item errors")
         for error in exc.errors[:5]:
-            print(error)
+            log(str(error))
         raise
 
 
 def ingest_meilisearch(products: list[dict[str, Any]], reset: bool) -> None:
+    started_at = time.perf_counter()
     client = meilisearch.Client(settings.meili_url, settings.meili_master_key)
     if reset:
+        log("Meilisearch: reset requested, deleting product/review indexes")
         for index_name in ["amazon_electronics_products", "amazon_electronics_reviews"]:
             try:
                 wait_task(client, client.delete_index(index_name))
+                log(f"Meilisearch: deleted {index_name}")
             except Exception:
+                log(f"Meilisearch: {index_name} did not exist or could not be deleted")
                 pass
+        log("Meilisearch: creating product/review indexes")
         wait_task(client, client.create_index("amazon_electronics_products", {"primaryKey": "product_id"}))
         wait_task(client, client.create_index("amazon_electronics_reviews", {"primaryKey": "review_id"}))
+    log("Meilisearch: applying index settings")
     create_indexes()
     products_index = client.index("amazon_electronics_products")
-    for chunk in chunks(products, 1000):
+    log(f"Meilisearch products: indexing {len(products)} docs")
+    processed = 0
+    for index, chunk in enumerate(chunks(products, 1000), start=1):
         task = products_index.add_documents(chunk, primary_key="product_id")
         wait_task(client, task)
+        processed += len(chunk)
+        log_progress("Meilisearch products", index, len(chunk), len(products), 1000, processed=processed)
+    log_done("Meilisearch products ingest", started_at)
 
 
 def ingest_meilisearch_reviews(reviews: list[dict[str, Any]], known_products: set[str]) -> None:
+    started_at = time.perf_counter()
     client = meilisearch.Client(settings.meili_url, settings.meili_master_key)
     review_docs = [review for review in reviews if review["product_id"] in known_products]
     if not review_docs:
+        log("Meilisearch reviews: no docs to index")
         return
     reviews_index = client.index("amazon_electronics_reviews")
-    for chunk in chunks(review_docs, 1000):
+    log(f"Meilisearch reviews: indexing {len(review_docs)} docs")
+    processed = 0
+    for index, chunk in enumerate(chunks(review_docs, 1000), start=1):
         task = reviews_index.add_documents(chunk, primary_key="review_id")
         wait_task(client, task)
+        processed += len(chunk)
+        log_progress("Meilisearch reviews", index, len(chunk), len(review_docs), 1000, processed=processed)
+    log_done("Meilisearch reviews ingest", started_at)
 
 
-def chunks(items: list[dict[str, Any]], size: int):
+def chunks(items: list[Any], size: int):
     for index in range(0, len(items), size):
         yield items[index : index + size]
+
+
+def log_progress(
+    label: str,
+    chunk_index: int,
+    chunk_count: int,
+    total: int,
+    chunk_size: int,
+    processed: int | None = None,
+) -> None:
+    processed = processed if processed is not None else min(chunk_index * chunk_size, total)
+    percent = (processed / total * 100) if total else 100
+    log(f"{label}: chunk {chunk_index} wrote {chunk_count} rows/docs ({processed}/{total}, {percent:.1f}%)")
 
 
 def task_uid(task: Any) -> int:
@@ -278,6 +345,7 @@ def wait_task(client: meilisearch.Client, task: Any) -> None:
 
 
 def main() -> int:
+    started_at = time.perf_counter()
     args = parse_args()
     data_dir = settings.data_dir
     product_path = args.products or default_path(
@@ -291,21 +359,31 @@ def main() -> int:
         data_dir / "sample" / "reviews.jsonl",
     )
 
-    print(f"Products: {product_path}")
-    print(f"Reviews:  {review_path if review_path.exists() else 'not found'}")
+    log("Starting ingest")
+    log(f"Products: {product_path}")
+    log(f"Reviews:  {review_path if review_path.exists() else 'not found'}")
+    log(f"Product limit: {format_limit(args.product_limit)}")
+    log(f"Review limit: {format_limit(args.review_limit)}")
+    load_started_at = time.perf_counter()
+    log("Loading products")
     products = load_products(product_path, args.product_limit)
+    log(f"Loaded {len(products)} products from source")
     known_products = {product["product_id"] for product in products}
+    log("Loading reviews matching selected products")
     reviews, aggregates = load_reviews(
         review_path if review_path.exists() else None,
         args.review_limit,
         product_ids=known_products,
     )
+    log(f"Loaded {len(reviews)} reviews and {len(aggregates)} product review aggregates")
+    log("Enriching products and reviews")
     products = enrich_products(products, aggregates)
     enriched_reviews = enrich_reviews(reviews, products)
+    log_done("Data load and enrichment", load_started_at)
 
-    print(f"Loaded {len(products)} products and {len(reviews)} reviews")
-    print(f"Engine: {args.engine}")
-    print(
+    log(f"Loaded {len(products)} products and {len(reviews)} reviews")
+    log(f"Engine: {args.engine}")
+    log(
         "Elasticsearch bulk: "
         f"chunk_size={args.es_bulk_chunk_size}, "
         f"request_timeout={args.es_request_timeout}, "
@@ -313,11 +391,11 @@ def main() -> int:
     )
 
     if args.engine in {"all", "postgres"}:
-        print("Ingesting PostgreSQL...")
+        log("Ingesting PostgreSQL...")
         ingest_postgres(products, reviews, args.reset)
 
     if args.engine in {"all", "elasticsearch"}:
-        print("Ingesting Elasticsearch products...")
+        log("Ingesting Elasticsearch products...")
         ingest_elasticsearch(
             products,
             args.reset,
@@ -325,7 +403,7 @@ def main() -> int:
             args.es_request_timeout,
             args.es_max_retries,
         )
-        print("Ingesting Elasticsearch reviews...")
+        log("Ingesting Elasticsearch reviews...")
         ingest_elasticsearch_reviews(
             enriched_reviews,
             known_products,
@@ -335,12 +413,13 @@ def main() -> int:
         )
 
     if args.engine in {"all", "meilisearch"}:
-        print("Ingesting Meilisearch products...")
+        log("Ingesting Meilisearch products...")
         ingest_meilisearch(products, args.reset)
-        print("Ingesting Meilisearch reviews...")
+        log("Ingesting Meilisearch reviews...")
         ingest_meilisearch_reviews(enriched_reviews, known_products)
 
-    print("Ingest complete")
+    log_done("Ingest", started_at)
+    log("Ingest complete")
     return 0
 
 
