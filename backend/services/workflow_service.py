@@ -46,9 +46,9 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "title": "ACT 1: Keyword Product Search",
         "flow_name": "Keyword Product Search",
         "default_query": PRODUCT_DISCOVERY_QUERIES[0],
-        "user_action": "Tìm sản phẩm bằng keyword chưa hoàn hảo",
-        "demo_goal": "Tìm đúng product dù query sai chính tả, thiếu từ, hoặc dùng từ gần nghĩa.",
-        "difference": "Show fuzzy search, field boosting, ranking theo title / features / description.",
+        "user_action": "Search products with imperfect keywords.",
+        "demo_goal": "Find the right product even when the query has typos, missing terms, or near-synonyms.",
+        "difference": "Shows fuzzy search, field boosting, and ranking over title, features, and description.",
         "summary": (
             "Keyword product search for imperfect user queries. Elasticsearch demonstrates fuzzy "
             "search, boosted product fields, and flexible ranking across title, features, and description."
@@ -58,9 +58,12 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "title": "ACT 2: Review Deep Search",
         "flow_name": "Review Deep Search",
         "default_query": REVIEW_DEEP_SEARCH_QUERIES[0],
-        "user_action": "Tìm sâu trong nội dung review",
-        "demo_goal": "Tìm review cụ thể nói về vấn đề hoặc trải nghiệm của người dùng.",
-        "difference": "Search trên review_title / review_text, có highlight, filter theo sentiment, rating, helpful_vote.",
+        "user_action": "Search deeply inside review content.",
+        "demo_goal": "Find specific reviews that mention a user problem, quality signal, or lived experience.",
+        "difference": (
+            "Searches review_title / review_text with highlight, sentiment routing, "
+            "rating filters, and helpful_vote sorting."
+        ),
         "summary": (
             "Deep review search over logical review_title/review_text fields with snippets, rating "
             "filters, sentiment routing, and helpful_vote sorting."
@@ -70,9 +73,12 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "title": "ACT 3: Review Analytics & Aggregation",
         "flow_name": "Review Analytics & Aggregation",
         "default_query": "overheating",
-        "user_action": "Search một chủ đề rồi tổng hợp insight",
-        "demo_goal": "Trả lời kiểu vấn đề này phổ biến ở brand/category nào, rating phân bổ ra sao.",
-        "difference": "Elasticsearch mạnh vì có search + aggregation/facet trong cùng engine; Meilisearch/Postgres thường cần xử lý thêm ở app hoặc SQL.",
+        "user_action": "Search a topic and summarize the insight.",
+        "demo_goal": "Answer which brands/categories are associated with an issue and how ratings are distributed.",
+        "difference": (
+            "Elasticsearch combines search plus aggregation/facets in one engine; "
+            "Meilisearch/PostgreSQL need app-side or SQL work."
+        ),
         "summary": (
             "Review analytics workflow for turning a topic into brand/category/rating insights. "
             "Elasticsearch combines search, aggregation, and facets inside one engine."
@@ -82,9 +88,9 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "title": "ACT 4: Semantic Recommendation",
         "flow_name": "Semantic Recommendation",
         "default_query": RECOMMENDATION_QUERIES[0],
-        "user_action": "Nhập nhu cầu tự nhiên, dài hơn keyword",
-        "demo_goal": "Gợi ý sản phẩm phù hợp dựa trên intent, product fields, review evidence, rating.",
-        "difference": "Show khác biệt giữa keyword search truyền thống và search/recommendation thông minh.",
+        "user_action": "Enter a natural-language need that is longer than a keyword query.",
+        "demo_goal": "Recommend products using intent, product fields, review evidence, and rating signals.",
+        "difference": "Shows the difference between traditional keyword search and smarter search/recommendation.",
         "summary": (
             "Semantic recommendation workflow for natural-language needs. Elasticsearch blends "
             "intent expansion, product fields, review evidence, and rating/review signals."

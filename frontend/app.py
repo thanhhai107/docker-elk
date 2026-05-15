@@ -39,9 +39,13 @@ def clean_highlight(value: str) -> str:
 def render_hit(hit: dict[str, Any], document_type: str) -> None:
     highlights = hit.get("highlights", {})
     title_key = "review_title" if document_type == "review" else "title"
-    title = clean_highlight((highlights.get(title_key) or highlights.get("title") or [hit.get(title_key, hit.get("title", ""))])[0])
     body_key = "review_text" if document_type == "review" else "description"
-    body = clean_highlight((highlights.get(body_key) or highlights.get("text") or [hit.get(body_key, hit.get("text", ""))])[0])
+    title = clean_highlight(
+        (highlights.get(title_key) or highlights.get("title") or [hit.get(title_key, hit.get("title", ""))])[0]
+    )
+    body = clean_highlight(
+        (highlights.get(body_key) or highlights.get("text") or [hit.get(body_key, hit.get("text", ""))])[0]
+    )
 
     st.markdown(f"**{title or hit.get('product_id') or hit.get('review_id')}**", unsafe_allow_html=True)
     if document_type == "review":
@@ -63,7 +67,7 @@ def render_hit(hit: dict[str, Any], document_type: str) -> None:
 
 def render_result(result: dict[str, Any]) -> None:
     label = ENGINE_LABELS.get(result["engine"], result["engine"])
-    st.subheader(label)
+    st.markdown(f"### {label}")
     if result.get("error"):
         st.error(result["error"])
         return
@@ -101,25 +105,30 @@ def render_scenario(scenario_id: str, selected_query: str | None, limit: int, en
         st.error(f"Backend is not ready: {exc}")
         return
 
-    st.markdown(f"**Query:** `{data['query']}`")
-    st.markdown(f"**Flow:** {data.get('flow_name', data.get('title', ''))}")
-    st.caption(data.get("summary", ""))
-    detail_cols = st.columns(3)
-    detail_cols[0].markdown(f"**Người dùng làm gì?**  \n{data.get('user_action', '')}")
-    detail_cols[1].markdown(f"**Mục tiêu demo**  \n{data.get('demo_goal', '')}")
-    detail_cols[2].markdown(f"**Điểm khác biệt**  \n{data.get('difference', '')}")
-    if data.get("winner_reason"):
-        st.info(f"Winner: Elasticsearch. {data['winner_reason']}")
+    st.markdown("## 2. Act Flow & Demo Intent")
+    with st.container(border=True):
+        st.markdown(f"**Query:** `{data['query']}`")
+        st.markdown(f"**Flow:** {data.get('flow_name', data.get('title', ''))}")
+        st.caption(data.get("summary", ""))
+        detail_cols = st.columns(3)
+        detail_cols[0].markdown(f"**User action**  \n{data.get('user_action', '')}")
+        detail_cols[1].markdown(f"**Demo goal**  \n{data.get('demo_goal', '')}")
+        detail_cols[2].markdown(f"**Key difference**  \n{data.get('difference', '')}")
+        if data.get("winner_reason"):
+            st.info(f"Winner: Elasticsearch. {data['winner_reason']}")
 
+    st.markdown("## 3. Output")
     results = data["results"]
     if len(results) == 1:
-        render_result(results[0])
+        with st.container(border=True):
+            render_result(results[0])
         return
 
     cols = st.columns(len(results))
     for col, result in zip(cols, results):
         with col:
-            render_result(result)
+            with st.container(border=True):
+                render_result(result)
 
 
 def render_benchmark(limit: int) -> None:
@@ -178,6 +187,9 @@ st.markdown(
     div[data-testid="stForm"] button[kind="primaryFormSubmit"] {
         width: 100%;
     }
+    section.main div[data-testid="stVerticalBlock"] > div:has(h2) {
+        margin-top: 0.6rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -190,18 +202,23 @@ service_labels = {label: engine for engine, label in SERVICE_LABELS.items()}
 if "search_request" not in st.session_state:
     st.session_state.search_request = None
 
-with st.form("search_form"):
-    search_col, act_col, service_col, limit_col, button_col = st.columns([4.4, 2.4, 1.9, 1.1, 1])
-    with search_col:
-        query = st.text_input("Search query", placeholder="Type your product need, review problem, or analytics keyword")
-    with act_col:
-        selected_label = st.selectbox("Act", list(scenario_labels))
-    with service_col:
-        selected_service_label = st.selectbox("Service", list(service_labels))
-    with limit_col:
-        limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1)
-    with button_col:
-        submitted = st.form_submit_button("Search", use_container_width=True)
+st.markdown("## 1. Input & Search Options")
+with st.container(border=True):
+    with st.form("search_form"):
+        search_col, act_col, service_col, limit_col, button_col = st.columns([4.4, 2.4, 1.9, 1.1, 1])
+        with search_col:
+            query = st.text_input(
+                "Search query",
+                placeholder="Type your product need, review problem, or analytics keyword",
+            )
+        with act_col:
+            selected_label = st.selectbox("Act", list(scenario_labels))
+        with service_col:
+            selected_service_label = st.selectbox("Service", list(service_labels))
+        with limit_col:
+            limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1)
+        with button_col:
+            submitted = st.form_submit_button("Search", use_container_width=True)
 
 if submitted:
     selected_scenario = scenario_labels[selected_label]
