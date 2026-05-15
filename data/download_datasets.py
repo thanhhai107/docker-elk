@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -18,6 +20,15 @@ DATASETS = {
         "description": "Amazon Electronics review events, reserved for future personalization work",
     },
 }
+
+
+def log(message: str) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[{timestamp}] {message}", flush=True)
+
+
+def format_mib(bytes_count: int) -> str:
+    return f"{bytes_count / 1024 / 1024:.1f} MiB"
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,16 +70,24 @@ def selected_datasets(include_reviews: bool, include_all: bool) -> list[str]:
 
 def download_file(url: str, target: Path) -> None:
     partial = target.with_suffix(target.suffix + ".part")
-    print(f"Downloading {url}")
-    print(f"       to {target}")
+    log(f"Downloading {url}")
+    log(f"Target: {target}")
     if partial.exists():
+        log(f"Removing partial file: {partial}")
         partial.unlink()
 
+    started_at = time.perf_counter()
     with urlopen(url, timeout=60) as response, partial.open("wb") as output:
         total = response.headers.get("Content-Length")
         total_bytes = int(total) if total and total.isdigit() else None
         downloaded = 0
-        next_report = 0
+        next_percent_report = 0
+        next_bytes_report = 100 * 1024 * 1024
+
+        if total_bytes:
+            log(f"Remote size: {format_mib(total_bytes)}")
+        else:
+            log("Remote size: unknown")
 
         while True:
             chunk = response.read(1024 * 1024)
@@ -79,12 +98,25 @@ def download_file(url: str, target: Path) -> None:
             downloaded += len(chunk)
             if total_bytes:
                 percent = int(downloaded * 100 / total_bytes)
-                if percent >= next_report:
-                    print(f"  {percent:3d}% ({downloaded / 1024 / 1024:.1f} MiB)")
-                    next_report += 10
+                if percent >= next_percent_report:
+                    elapsed = max(time.perf_counter() - started_at, 0.001)
+                    speed = downloaded / elapsed
+                    log(
+                        f"Downloaded {percent:3d}% "
+                        f"({format_mib(downloaded)} / {format_mib(total_bytes)}, "
+                        f"{format_mib(int(speed))}/s)"
+                    )
+                    next_percent_report += 10
+            elif downloaded >= next_bytes_report:
+                elapsed = max(time.perf_counter() - started_at, 0.001)
+                speed = downloaded / elapsed
+                log(f"Downloaded {format_mib(downloaded)} ({format_mib(int(speed))}/s)")
+                next_bytes_report += 100 * 1024 * 1024
 
     partial.replace(target)
-    print(f"Done: {target}")
+    elapsed = max(time.perf_counter() - started_at, 0.001)
+    speed = downloaded / elapsed
+    log(f"Done: {target} ({format_mib(downloaded)} in {elapsed:.1f}s, {format_mib(int(speed))}/s)")
 
 
 def main() -> int:
@@ -95,15 +127,15 @@ def main() -> int:
         dataset = DATASETS[name]
         target = args.raw_dir / dataset["filename"]
 
-        print(f"\n{name}: {dataset['description']}")
+        log(f"{name}: {dataset['description']}")
         if target.exists() and not args.force:
-            print(f"Skip existing file: {target}")
+            log(f"Skip existing file: {target} ({format_mib(target.stat().st_size)})")
             continue
 
         try:
             download_file(dataset["url"], target)
         except (HTTPError, URLError, TimeoutError) as exc:
-            print(f"Failed to download {name}: {exc}")
+            log(f"Failed to download {name}: {exc}")
             return 1
 
     return 0
