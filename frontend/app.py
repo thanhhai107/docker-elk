@@ -239,6 +239,3 @@ if st.session_state.search_request:
     render_scenario(request["scenario_id"], request["query"], request["limit"], request.get("engine", "all"))
 else:
     st.info("Enter a query, choose an ACT, then press Search.")
-
-with st.expander("Benchmark Report", expanded=False):
-    render_benchmark(10)
