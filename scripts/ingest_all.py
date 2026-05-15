@@ -12,8 +12,7 @@ from elasticsearch import Elasticsearch, helpers
 from elasticsearch.helpers import BulkIndexError
 
 from backend.config import settings
-from backend.ingest.load_products import load_products
-from backend.ingest.load_reviews import load_reviews
+from backend.ingest.normalize import aggregate_reviews, iter_jsonl, normalize_product, normalize_review
 from scripts.create_elasticsearch_indices import create_indices
 from scripts.create_meilisearch_indexes import create_indexes
 
@@ -95,6 +94,71 @@ def default_path(*candidates: Path) -> Path:
         if path.exists():
             return path
     return candidates[-1]
+
+
+def load_products_with_tracking(path: Path, limit: int | None) -> list[dict[str, Any]]:
+    products = []
+    scanned = 0
+    next_log_at = 50_000
+    for raw in iter_jsonl(path):
+        scanned += 1
+        product = normalize_product(raw)
+        if product:
+            products.append(product)
+        if len(products) >= next_log_at:
+            log(f"Products load: scanned {scanned} rows, accepted {len(products)} products")
+            next_log_at += 50_000
+        if limit is not None and len(products) >= limit:
+            break
+    log(f"Products load: done scanned {scanned} rows, accepted {len(products)} products")
+    return products
+
+
+def load_reviews_with_tracking(
+    path: Path | None,
+    limit: int | None,
+    product_ids: set[str] | None,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    if not path or not path.exists():
+        log("Reviews load: source not found, accepted 0 reviews")
+        return [], {}
+    reviews = []
+    scanned = 0
+    normalized = 0
+    matched_products = 0
+    next_log_at = 50_000
+    for raw in iter_jsonl(path):
+        scanned += 1
+        review = normalize_review(raw)
+        if not review:
+            continue
+        normalized += 1
+        if product_ids is not None and review["product_id"] not in product_ids:
+            if scanned >= next_log_at:
+                log(
+                    "Reviews load: "
+                    f"scanned {scanned} rows, normalized {normalized}, "
+                    f"matched products {matched_products}, accepted {len(reviews)} reviews"
+                )
+                next_log_at += 50_000
+            continue
+        matched_products += 1
+        reviews.append(review)
+        if len(reviews) >= next_log_at:
+            log(
+                "Reviews load: "
+                f"scanned {scanned} rows, normalized {normalized}, "
+                f"matched products {matched_products}, accepted {len(reviews)} reviews"
+            )
+            next_log_at += 50_000
+        if limit is not None and len(reviews) >= limit:
+            break
+    log(
+        "Reviews load: done "
+        f"scanned {scanned} rows, normalized {normalized}, "
+        f"matched products {matched_products}, accepted {len(reviews)} reviews"
+    )
+    return reviews, aggregate_reviews(reviews)
 
 
 def enrich_products(products: list[dict[str, Any]], aggregates: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -366,11 +430,11 @@ def main() -> int:
     log(f"Review limit: {format_limit(args.review_limit)}")
     load_started_at = time.perf_counter()
     log("Loading products")
-    products = load_products(product_path, args.product_limit)
+    products = load_products_with_tracking(product_path, args.product_limit)
     log(f"Loaded {len(products)} products from source")
     known_products = {product["product_id"] for product in products}
     log("Loading reviews matching selected products")
-    reviews, aggregates = load_reviews(
+    reviews, aggregates = load_reviews_with_tracking(
         review_path if review_path.exists() else None,
         args.review_limit,
         product_ids=known_products,
