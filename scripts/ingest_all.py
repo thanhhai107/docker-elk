@@ -50,6 +50,7 @@ REVIEW_COLUMNS = [
 DEFAULT_ES_BULK_CHUNK_SIZE = 1000
 DEFAULT_MEILI_CHUNK_SIZE = 2000
 DEFAULT_POSTGRES_CHUNK_SIZE = 5000
+DEFAULT_MAX_REVIEWS_PER_PRODUCT = 5
 
 
 def log(message: str) -> None:
@@ -70,7 +71,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--products", type=Path, default=None, help="Product JSONL/GZ path.")
     parser.add_argument("--reviews", type=Path, default=None, help="Review JSONL/GZ path.")
     parser.add_argument("--product-limit", type=int, default=100_000, help="Max products to ingest. Default: 100000.")
-    parser.add_argument("--review-limit", type=int, default=100_000, help="Max matching reviews to ingest. Default: 100000.")
+    parser.add_argument(
+        "--max-reviews-per-product",
+        type=int,
+        default=DEFAULT_MAX_REVIEWS_PER_PRODUCT,
+        help=(
+            "Max reviews accepted for each selected product. "
+            f"Use 0 to disable this per-product cap. Default: {DEFAULT_MAX_REVIEWS_PER_PRODUCT}."
+        ),
+    )
     parser.add_argument(
         "--es-bulk-chunk-size",
         type=int,
@@ -106,7 +115,7 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.all:
         args.product_limit = None
-        args.review_limit = None
+        args.max_reviews_per_product = 0
     return args
 
 
@@ -137,16 +146,18 @@ def load_products_with_tracking(path: Path, limit: int | None) -> list[dict[str,
 
 def load_reviews_with_tracking(
     path: Path | None,
-    limit: int | None,
     product_ids: set[str] | None,
+    max_reviews_per_product: int | None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     if not path or not path.exists():
         log("Reviews load: source not found, accepted 0 reviews")
         return [], {}
     reviews = []
+    reviews_by_product: dict[str, int] = {}
     scanned = 0
     normalized = 0
     matched_products = 0
+    skipped_per_product_cap = 0
     next_log_at = 50_000
     for raw in iter_jsonl(path):
         scanned += 1
@@ -164,20 +175,34 @@ def load_reviews_with_tracking(
                 next_log_at += 50_000
             continue
         matched_products += 1
+        product_review_count = reviews_by_product.get(review["product_id"], 0)
+        if max_reviews_per_product is not None and product_review_count >= max_reviews_per_product:
+            skipped_per_product_cap += 1
+            if scanned >= next_log_at:
+                log(
+                    "Reviews load: "
+                    f"scanned {scanned} rows, normalized {normalized}, "
+                    f"matched products {matched_products}, accepted {len(reviews)} reviews, "
+                    f"skipped per-product cap {skipped_per_product_cap}"
+                )
+                next_log_at += 50_000
+            continue
         reviews.append(review)
+        reviews_by_product[review["product_id"]] = product_review_count + 1
         if len(reviews) >= next_log_at:
             log(
                 "Reviews load: "
                 f"scanned {scanned} rows, normalized {normalized}, "
-                f"matched products {matched_products}, accepted {len(reviews)} reviews"
+                f"matched products {matched_products}, accepted {len(reviews)} reviews, "
+                f"skipped per-product cap {skipped_per_product_cap}"
             )
             next_log_at += 50_000
-        if limit is not None and len(reviews) >= limit:
-            break
     log(
         "Reviews load: done "
         f"scanned {scanned} rows, normalized {normalized}, "
-        f"matched products {matched_products}, accepted {len(reviews)} reviews"
+        f"matched products {matched_products}, accepted {len(reviews)} reviews, "
+        f"products with reviews {len(reviews_by_product)}, "
+        f"skipped per-product cap {skipped_per_product_cap}"
     )
     return reviews, aggregate_reviews(reviews)
 
@@ -454,7 +479,8 @@ def main() -> int:
     log(f"Products: {product_path}")
     log(f"Reviews:  {review_path if review_path.exists() else 'not found'}")
     log(f"Product limit: {format_limit(args.product_limit)}")
-    log(f"Review limit: {format_limit(args.review_limit)}")
+    per_product_cap = None if args.max_reviews_per_product <= 0 else args.max_reviews_per_product
+    log(f"Max reviews per product: {format_limit(per_product_cap)}")
     load_started_at = time.perf_counter()
     log("Loading products")
     products = load_products_with_tracking(product_path, args.product_limit)
@@ -463,8 +489,8 @@ def main() -> int:
     log("Loading reviews matching selected products")
     reviews, aggregates = load_reviews_with_tracking(
         review_path if review_path.exists() else None,
-        args.review_limit,
         product_ids=known_products,
+        max_reviews_per_product=per_product_cap,
     )
     log(f"Loaded {len(reviews)} reviews and {len(aggregates)} product review aggregates")
     log("Enriching products and reviews")

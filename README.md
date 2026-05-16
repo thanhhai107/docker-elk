@@ -122,8 +122,8 @@ cd /opt/nexus/docker-elk
 docker compose exec -T backend python scripts/ingest_all.py --reset
 ```
 
-This command resets and ingests up to 100,000 products and 100,000 reviews
-from the selected data files into:
+This command resets and ingests up to 100,000 products. Matching reviews are
+selected for those products with a per-product cap.
 
 ```text
 Elasticsearch
@@ -147,6 +147,18 @@ docker compose exec -T backend python scripts/ingest_all.py --reset \
   --meili-chunk-size 2000 \
   --postgres-chunk-size 5000
 ```
+
+By default, review selection is balanced across products:
+
+```text
+--product-limit 100000
+--max-reviews-per-product 5
+```
+
+This means the script accepts the first 100,000 valid products, then scans the
+review file and accepts matching reviews for those products. No selected product
+can contribute more than 5 reviews. Use `--max-reviews-per-product 0` to disable
+the per-product cap.
 
 ## 3. Load Real Amazon Electronics Data
 
@@ -176,13 +188,16 @@ data/raw/Electronics.jsonl.gz
 docker compose exec -T backend python scripts/ingest_all.py --reset
 ```
 
-The ingest script selects data in file order:
+The ingest script selects product data in file order, then balances review
+selection across those products:
 
 - `--product-limit 100000`: the first 100,000 valid products from
   `data/raw/meta_Electronics.jsonl.gz`.
-- `--review-limit 100000`: the first 100,000 valid reviews from
-  `data/raw/Electronics.jsonl.gz` whose `parent_asin` or `asin` matches one of
-  the selected products.
+- Reviews: all valid reviews from `data/raw/Electronics.jsonl.gz` whose
+  `parent_asin` or `asin` matches one of the selected products, after applying
+  `--max-reviews-per-product`.
+- `--max-reviews-per-product 5`: no selected product contributes more than 5
+  reviews by default. Use `0` to disable this cap.
 
 ## 4. Open the Demo
 
