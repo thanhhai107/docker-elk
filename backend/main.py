@@ -4,7 +4,6 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 
-from backend.services.benchmark_service import BenchmarkService
 from backend.services.elasticsearch_service import ElasticsearchSearchService
 from backend.services.meilisearch_service import MeiliSearchService
 from backend.services.postgres_service import PostgresSearchService
@@ -52,11 +51,6 @@ def search(
     return services[engine].search(params)
 
 
-@app.get("/compare")
-def compare(params: dict[str, Any] = Depends(query_params)) -> dict[str, Any]:
-    return BenchmarkService().compare(params)
-
-
 @app.get("/analytics/reviews")
 def review_analytics() -> dict[str, Any]:
     services = [ElasticsearchSearchService(), MeiliSearchService(), PostgresSearchService()]
@@ -85,8 +79,3 @@ def run_scenario(
         return WorkflowService().run(scenario_id, q, limit, engine)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown scenario: {scenario_id}") from exc
-
-
-@app.get("/workflow-benchmark")
-def workflow_benchmark(limit: int = Query(10, ge=1, le=50)) -> dict[str, Any]:
-    return WorkflowService().benchmark(limit)

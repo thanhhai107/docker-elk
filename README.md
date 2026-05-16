@@ -19,7 +19,6 @@ review evidence search, and review analytics/aggregation.
 - Faceted search and aggregations
 - Keyword highlighting in search results
 - Review analytics by brand, category, rating, and keyword
-- Benchmarking by total workflow time, not just raw search time
 
 ## Cluster Layout
 
@@ -184,14 +183,14 @@ http://localhost:8000/docs
 
 ## Demo Scenarios
 
-The frontend has one search bar, an ACT selector, a service selector, and a
+The frontend has one search bar, a scenario selector, a service selector, and a
 result area split by engine.
 
-| ACT | Flow | User query | Demo goal | Main difference |
+| Scenario | Flow | User query | Demo goal | Main difference |
 | --- | --- | --- | --- | --- |
-| ACT 1 | Product Discovery With Typos | `wireles noise canclling headphnes sony` | Find Sony wireless noise cancelling headphones despite multiple misspellings | Elasticsearch combines fuzzy search, field boosting, and ranking over `title`, `brand`, `features`, `description`, and `review_text` |
-| ACT 2 | Review Evidence Search | `battery dies after a week` | Return low-rating review snippets as evidence, prioritized by helpful votes | Elasticsearch combines review text search, `rating <= 2`, highlighting, and helpful-vote sorting |
-| ACT 3 | Review Analytics & Aggregation | `battery problem` | Find which brands/categories have the most negative battery-problem reviews and rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
+| Scenario 1 | Product Discovery With Typos | `wireles noise canclling headphnes sony` | Find Sony wireless noise cancelling headphones despite multiple misspellings | Elasticsearch combines fuzzy search, field boosting, and ranking over `title`, `brand`, `features`, `description`, and `review_text` |
+| Scenario 2 | Review Evidence Search | `battery dies after a week` | Return low-rating review snippets as evidence, prioritized by helpful votes | Elasticsearch combines review text search, `rating <= 2`, highlighting, and helpful-vote sorting |
+| Scenario 3 | Review Analytics & Aggregation | `battery problem` | Find which brands/categories have the most negative battery-problem reviews and rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
 
 Each scenario shows 3 columns:
 
@@ -235,7 +234,7 @@ Item metadata source fields used by this demo:
 | `categories` / `main_category` | Normalized to `category`. |
 
 The product index also stores a small aggregated `review_text` field from
-matching reviews so ACT 1 can search product metadata plus review language.
+matching reviews so Scenario 1 can search product metadata plus review language.
 
 ## Main Endpoints
 
@@ -248,21 +247,14 @@ curl "http://localhost:8000/scenarios"
 Run a single scenario:
 
 ```bash
-curl "http://localhost:8000/scenarios/act-1-product-discovery?q=wireles%20noise%20canclling%20headphnes%20sony"
-curl "http://localhost:8000/scenarios/act-2-review-deep-search?q=battery%20dies%20after%20a%20week"
-curl "http://localhost:8000/scenarios/act-3-review-analytics?q=battery%20problem"
-```
-
-Benchmark all workflows:
-
-```bash
-curl "http://localhost:8000/workflow-benchmark"
+curl "http://localhost:8000/scenarios/scenario-1-product-discovery?q=wireles%20noise%20canclling%20headphnes%20sony"
+curl "http://localhost:8000/scenarios/scenario-2-review-deep-search?q=battery%20dies%20after%20a%20week"
+curl "http://localhost:8000/scenarios/scenario-3-review-analytics?q=battery%20problem"
 ```
 
 Basic search endpoints:
 
 ```bash
-curl "http://localhost:8000/compare?q=bluetooth%20speaker"
 curl "http://localhost:8000/search/elasticsearch?q=bluetooth%20speaker"
 curl "http://localhost:8000/search/meilisearch?q=bluetooth%20speaker"
 curl "http://localhost:8000/search/postgres?q=bluetooth%20speaker"

@@ -20,13 +20,13 @@ SERVICE_LABELS = {
     **ENGINE_LABELS,
 }
 SCENARIOS = [
-    ("act-1-product-discovery", "ACT 1: Product Discovery With Typos"),
-    ("act-2-review-deep-search", "ACT 2: Review Evidence Search"),
-    ("act-3-review-analytics", "ACT 3: Review Analytics & Aggregation"),
+    ("scenario-1-product-discovery", "Scenario 1: Product Discovery With Typos"),
+    ("scenario-2-review-deep-search", "Scenario 2: Review Evidence Search"),
+    ("scenario-3-review-analytics", "Scenario 3: Review Analytics & Aggregation"),
 ]
 
 SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
-    "act-1-product-discovery": {
+    "scenario-1-product-discovery": {
         "elasticsearch": [
             "Target: product index.",
             "Runs boosted multi_match over title, brand, category, features, description, and review_text.",
@@ -46,7 +46,7 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
             "Does not use pg_trgm in this scenario, so typo-heavy tokens can miss.",
         ],
     },
-    "act-2-review-deep-search": {
+    "scenario-2-review-deep-search": {
         "elasticsearch": [
             "Target: review index.",
             "Searches logical review_title and review_text fields.",
@@ -66,7 +66,7 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
             "Uses ts_headline for snippets and sorts by text rank then helpful_vote.",
         ],
     },
-    "act-3-review-analytics": {
+    "scenario-3-review-analytics": {
         "elasticsearch": [
             "Target: review index.",
             "Runs size=0 analytics queries instead of returning product hits.",
@@ -235,7 +235,7 @@ def render_result(result: dict[str, Any]) -> None:
 def render_service_activities(scenario_id: str, data: dict[str, Any]) -> None:
     st.markdown("## 2. Service Execution Flow")
     st.markdown(f"**Query:** `{data['query']}`")
-    st.markdown(f"**Act:** {data.get('title', '')}")
+    st.markdown(f"**Scenario:** {data.get('title', '')}")
     st.caption(data.get("summary", ""))
 
     results = data.get("results", [])
@@ -314,14 +314,14 @@ if "search_request" not in st.session_state:
 
 st.markdown("## 1. Input & Search Options")
 with st.form("search_form", border=False):
-    search_col, act_col, service_col, limit_col, button_col = st.columns([4.4, 2.4, 1.9, 1.1, 1])
+    search_col, scenario_col, service_col, limit_col, button_col = st.columns([4.4, 2.4, 1.9, 1.1, 1])
     with search_col:
         query = st.text_input(
             "Search query",
             placeholder="Type your product need, review problem, or analytics keyword",
         )
-    with act_col:
-        selected_label = st.selectbox("Act", list(scenario_labels))
+    with scenario_col:
+        selected_label = st.selectbox("Scenario", list(scenario_labels))
     with service_col:
         selected_service_label = st.selectbox("Service", list(service_labels))
     with limit_col:
@@ -333,8 +333,8 @@ if submitted:
     selected_scenario = scenario_labels[selected_label]
     selected_service = service_labels[selected_service_label]
     cleaned_query = query.strip()
-    if not cleaned_query and selected_scenario != "act-3-review-analytics":
-        st.warning("Enter a query before searching this ACT.")
+    if not cleaned_query and selected_scenario != "scenario-3-review-analytics":
+        st.warning("Enter a query before searching this scenario.")
     else:
         st.session_state.search_request = {
             "scenario_id": selected_scenario,
@@ -347,4 +347,4 @@ if st.session_state.search_request:
     request = st.session_state.search_request
     run_search(request["scenario_id"], request["query"], request["limit"], request.get("engine", "all"))
 else:
-    st.info("Enter a query, choose an ACT, then press Search.")
+    st.info("Enter a query, choose a scenario, then press Search.")

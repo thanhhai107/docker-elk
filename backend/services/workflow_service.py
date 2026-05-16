@@ -37,8 +37,8 @@ REVIEW_ANALYTICS_QUERIES = [
 QUERY_OPTIONS = PRODUCT_DISCOVERY_QUERIES + REVIEW_DEEP_SEARCH_QUERIES + REVIEW_ANALYTICS_QUERIES
 
 SCENARIOS: dict[str, dict[str, Any]] = {
-    "act-1-product-discovery": {
-        "title": "ACT 1: Product Discovery With Typos",
+    "scenario-1-product-discovery": {
+        "title": "Scenario 1: Product Discovery With Typos",
         "flow_name": "Product Discovery With Typos",
         "default_query": PRODUCT_DISCOVERY_QUERIES[0],
         "user_action": "Search for Sony wireless noise cancelling headphones with several misspellings.",
@@ -49,8 +49,8 @@ SCENARIOS: dict[str, dict[str, Any]] = {
             "search, boosted product fields, and flexible ranking across title, brand, features, description, and review text."
         ),
     },
-    "act-2-review-deep-search": {
-        "title": "ACT 2: Review Evidence Search",
+    "scenario-2-review-deep-search": {
+        "title": "Scenario 2: Review Evidence Search",
         "flow_name": "Review Evidence Search",
         "default_query": REVIEW_DEEP_SEARCH_QUERIES[0],
         "user_action": "Search reviews for evidence that a product battery dies after about a week.",
@@ -64,8 +64,8 @@ SCENARIOS: dict[str, dict[str, Any]] = {
             "filters, and helpful_vote sorting."
         ),
     },
-    "act-3-review-analytics": {
-        "title": "ACT 3: Review Analytics & Aggregation",
+    "scenario-3-review-analytics": {
+        "title": "Scenario 3: Review Analytics & Aggregation",
         "flow_name": "Review Analytics & Aggregation",
         "default_query": REVIEW_ANALYTICS_QUERIES[0],
         "user_action": "Search review text for battery problem and summarize the matched negative reviews.",
@@ -81,7 +81,6 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     },
 }
 
-BENCHMARK_ORDER = list(SCENARIOS)
 SearchEngine = Literal["all", "elasticsearch", "meilisearch", "postgres"]
 
 POSITIVE_REVIEW_TERMS = {"good", "great", "excellent", "easy", "quality", "works well", "install"}
@@ -146,41 +145,7 @@ class WorkflowService:
             "results": results,
         }
 
-    def benchmark(self, limit: int = 10) -> dict[str, Any]:
-        rows = []
-        for scenario_id in BENCHMARK_ORDER:
-            output = self.run(scenario_id, SCENARIOS[scenario_id]["default_query"], limit)
-            row = {
-                "workflow": output["title"],
-                "query": output["query"],
-                "winner": "Elasticsearch",
-                "winner_reason": output["winner_reason"],
-                "engines": {},
-            }
-            for result in output["results"]:
-                row["engines"][result["engine"]] = {
-                    "total_workflow_time_ms": result.get("took_ms"),
-                    "number_of_requests": result.get("number_of_requests"),
-                    "has_highlight": result.get("has_highlight"),
-                    "has_aggregation": result.get("has_aggregation"),
-                    "has_custom_ranking": result.get("has_custom_ranking"),
-                    "backend_complexity": result.get("backend_complexity"),
-                    "score": result.get("scorecard", {}).get("overall"),
-                }
-            rows.append(row)
-        return {
-            "rows": rows,
-            "scorecard_scale": "1-5, where 5 means strongest fit for the workflow",
-            "conclusion": (
-                "Elasticsearch is the best fit for these workflows because it combines field "
-                "boosting, fuzzy matching, flexible scoring, highlighting, filters and text-aware "
-                "aggregations in the same engine. Meilisearch is excellent for fast product search "
-                "and simple facets, but needs app-side fallbacks for deeper analytics. PostgreSQL FTS is useful and "
-                "transparent, but typo-heavy search and multi-step analytics require extra SQL or extensions."
-            ),
-        }
-
-    def _es_act_1_product_discovery(self, query: str, limit: int) -> dict[str, Any]:
+    def _es_scenario_1_product_discovery(self, query: str, limit: int) -> dict[str, Any]:
         body = {
             "size": limit,
             "query": {
@@ -219,7 +184,7 @@ class WorkflowService:
             score=5,
         )
 
-    def _meili_act_1_product_discovery(self, query: str, limit: int) -> dict[str, Any]:
+    def _meili_scenario_1_product_discovery(self, query: str, limit: int) -> dict[str, Any]:
         response = self.meili.index(PRODUCT_INDEX).search(
             query,
             {
@@ -239,7 +204,7 @@ class WorkflowService:
             score=4,
         )
 
-    def _pg_act_1_product_discovery(self, query: str, limit: int) -> dict[str, Any]:
+    def _pg_scenario_1_product_discovery(self, query: str, limit: int) -> dict[str, Any]:
         sql = """
             WITH q AS (
                 SELECT websearch_to_tsquery('english', %s) AS tsq
@@ -267,7 +232,7 @@ class WorkflowService:
             score=2,
         )
 
-    def _es_act_2_review_deep_search(self, query: str, limit: int) -> dict[str, Any]:
+    def _es_scenario_2_review_deep_search(self, query: str, limit: int) -> dict[str, Any]:
         rating_filter, sentiment = self._review_rating_filter(query)
         body = {
             "size": limit,
@@ -308,7 +273,7 @@ class WorkflowService:
         result["top_snippets"] = self._top_snippets(result["hits"])
         return result
 
-    def _meili_act_2_review_deep_search(self, query: str, limit: int) -> dict[str, Any]:
+    def _meili_scenario_2_review_deep_search(self, query: str, limit: int) -> dict[str, Any]:
         filter_expr, sentiment = self._meili_review_filter(query)
         response = self.meili.index(REVIEW_INDEX).search(
             query,
@@ -331,7 +296,7 @@ class WorkflowService:
             document_type="review",
         )
 
-    def _pg_act_2_review_deep_search(self, query: str, limit: int) -> dict[str, Any]:
+    def _pg_scenario_2_review_deep_search(self, query: str, limit: int) -> dict[str, Any]:
         operator, threshold, sentiment = self._pg_review_filter(query)
         sql = f"""
             WITH q AS (
@@ -364,7 +329,7 @@ class WorkflowService:
             document_type="review",
         )
 
-    def _es_act_3_review_analytics(self, query: str, limit: int) -> dict[str, Any]:
+    def _es_scenario_3_review_analytics(self, query: str, limit: int) -> dict[str, Any]:
         body = {
             "size": 0,
             "query": {
@@ -406,7 +371,7 @@ class WorkflowService:
             document_type="analytics",
         )
 
-    def _meili_act_3_review_analytics(self, query: str, limit: int) -> dict[str, Any]:
+    def _meili_scenario_3_review_analytics(self, query: str, limit: int) -> dict[str, Any]:
         response, docs = self._meili_matching_reviews(query)
         analytics = self._aggregate_review_docs(docs)
         analytics["facets"] = response.get("facetDistribution", {})
@@ -425,7 +390,7 @@ class WorkflowService:
             "scorecard": {"overall": 2},
         }
 
-    def _pg_act_3_review_analytics(self, query: str, limit: int) -> dict[str, Any]:
+    def _pg_scenario_3_review_analytics(self, query: str, limit: int) -> dict[str, Any]:
         with psycopg.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
             brand_metrics = conn.execute(
                 """
@@ -780,9 +745,9 @@ class WorkflowService:
 
     def _winner_reason(self, scenario_id: str) -> str:
         reasons = {
-            "act-1-product-discovery": "Field boosting, fuzzy query handling and flexible scoring make Elasticsearch strongest for the typo-heavy Sony headphone query.",
-            "act-2-review-deep-search": "Elasticsearch returns review evidence with highlights, rating <= 2 filters and helpful-vote sorting in one request.",
-            "act-3-review-analytics": "Elasticsearch combines full-text review search, rating filters and aggregations in the same engine without app-side fallback.",
+            "scenario-1-product-discovery": "Field boosting, fuzzy query handling and flexible scoring make Elasticsearch strongest for the typo-heavy Sony headphone query.",
+            "scenario-2-review-deep-search": "Elasticsearch returns review evidence with highlights, rating <= 2 filters and helpful-vote sorting in one request.",
+            "scenario-3-review-analytics": "Elasticsearch combines full-text review search, rating filters and aggregations in the same engine without app-side fallback.",
         }
         return reasons[scenario_id]
 
