@@ -16,84 +16,67 @@ PRODUCT_INDEX = "amazon_electronics_products"
 REVIEW_INDEX = "amazon_electronics_reviews"
 
 PRODUCT_DISCOVERY_QUERIES = [
+    "wireles noise canclling headphnes sony",
     "wireless noise cancelling headphone",
     "iphne charger fast charging",
     "bluetooth speaker bass",
-    "camera night vision",
-    "laptop lightweight long battery",
 ]
 
 REVIEW_DEEP_SEARCH_QUERIES = [
-    "battery drains fast",
+    "battery dies after a week",
+    "battery problem",
     "stopped working after a week",
-    "good sound quality",
-    "screen flickering",
-    "overheating problem",
-    "easy to install",
 ]
 
-RECOMMENDATION_QUERIES = [
-    "I need headphones for online meetings with good battery and noise cancellation",
-    "I want a charger that charges fast and does not overheat",
-    "I need a camera that works well at night and is easy to install",
-    "I want a bluetooth speaker with strong bass for a small room",
+REVIEW_ANALYTICS_QUERIES = [
+    "battery problem",
+    "battery drain problem",
+    "charging problem",
 ]
 
-QUERY_OPTIONS = PRODUCT_DISCOVERY_QUERIES + REVIEW_DEEP_SEARCH_QUERIES + RECOMMENDATION_QUERIES
+QUERY_OPTIONS = PRODUCT_DISCOVERY_QUERIES + REVIEW_DEEP_SEARCH_QUERIES + REVIEW_ANALYTICS_QUERIES
 
 SCENARIOS: dict[str, dict[str, Any]] = {
     "act-1-product-discovery": {
-        "title": "ACT 1: Keyword Product Search",
-        "flow_name": "Keyword Product Search",
+        "title": "ACT 1: Product Discovery With Typos",
+        "flow_name": "Product Discovery With Typos",
         "default_query": PRODUCT_DISCOVERY_QUERIES[0],
-        "user_action": "Search products with imperfect keywords.",
-        "demo_goal": "Find the right product even when the query has typos, missing terms, or near-synonyms.",
-        "difference": "Shows fuzzy search, field boosting, and ranking over title, features, and description.",
+        "user_action": "Search for Sony wireless noise cancelling headphones with several misspellings.",
+        "demo_goal": "Find the right Sony headphones even when wireless, cancelling, and headphones are misspelled.",
+        "difference": "Shows fuzzy search, field boosting, and ranking control over title, brand, category, features, description, and review text.",
         "summary": (
-            "Keyword product search for imperfect user queries. Elasticsearch demonstrates fuzzy "
-            "search, boosted product fields, and flexible ranking across title, features, and description."
+            "Product discovery for a typo-heavy and ambiguous query. Elasticsearch demonstrates fuzzy "
+            "search, boosted product fields, and flexible ranking across title, brand, features, description, and review text."
         ),
     },
     "act-2-review-deep-search": {
-        "title": "ACT 2: Review Deep Search",
-        "flow_name": "Review Deep Search",
+        "title": "ACT 2: Review Evidence Search",
+        "flow_name": "Review Evidence Search",
         "default_query": REVIEW_DEEP_SEARCH_QUERIES[0],
-        "user_action": "Search deeply inside review content.",
-        "demo_goal": "Find specific reviews that mention a user problem, quality signal, or lived experience.",
+        "user_action": "Search reviews for evidence that a product battery dies after about a week.",
+        "demo_goal": "Find negative review snippets, filtered to low ratings and prioritized by helpful votes.",
         "difference": (
-            "Searches review_title / review_text with highlight, sentiment routing, "
-            "rating filters, and helpful_vote sorting."
+            "Searches review_title / review_text with highlight, rating <= 2 filters, "
+            "and helpful_vote sorting."
         ),
         "summary": (
-            "Deep review search over logical review_title/review_text fields with snippets, rating "
-            "filters, sentiment routing, and helpful_vote sorting."
+            "Review evidence search over review_title/review_text with snippets, negative rating "
+            "filters, and helpful_vote sorting."
         ),
     },
     "act-3-review-analytics": {
         "title": "ACT 3: Review Analytics & Aggregation",
         "flow_name": "Review Analytics & Aggregation",
-        "default_query": "overheating",
-        "user_action": "Search a topic and summarize the insight.",
-        "demo_goal": "Answer which brands/categories are associated with an issue and how ratings are distributed.",
+        "default_query": REVIEW_ANALYTICS_QUERIES[0],
+        "user_action": "Search review text for battery problem and summarize the matched negative reviews.",
+        "demo_goal": "Answer which brands/categories receive the most battery-problem complaints and how ratings are distributed.",
         "difference": (
             "Elasticsearch combines search plus aggregation/facets in one engine; "
             "Meilisearch/PostgreSQL need app-side or SQL work."
         ),
         "summary": (
-            "Review analytics workflow for turning a topic into brand/category/rating insights. "
-            "Elasticsearch combines search, aggregation, and facets inside one engine."
-        ),
-    },
-    "act-4-hybrid-recommendation": {
-        "title": "ACT 4: Semantic Recommendation",
-        "flow_name": "Semantic Recommendation",
-        "default_query": RECOMMENDATION_QUERIES[0],
-        "user_action": "Enter a natural-language need that is longer than a keyword query.",
-        "demo_goal": "Recommend products using intent, product fields, review evidence, and rating signals.",
-        "difference": "Shows the difference between traditional keyword search and smarter search/recommendation.",
-        "summary": (
-            "Semantic recommendation workflow for natural-language needs. Elasticsearch blends "
-            "intent expansion, product fields, review evidence, and rating/review signals."
+            "Review analytics workflow for turning a battery-problem topic into brand/category/rating insights. "
+            "Elasticsearch combines full-text search, filters, aggregation, and facets inside one engine."
         ),
     },
 }
@@ -115,7 +98,7 @@ class WorkflowService:
             "query_options": QUERY_OPTIONS,
             "product_discovery_queries": PRODUCT_DISCOVERY_QUERIES,
             "review_deep_search_queries": REVIEW_DEEP_SEARCH_QUERIES,
-            "recommendation_queries": RECOMMENDATION_QUERIES,
+            "review_analytics_queries": REVIEW_ANALYTICS_QUERIES,
         }
 
     def run(
@@ -192,8 +175,8 @@ class WorkflowService:
                 "Elasticsearch is the best fit for these workflows because it combines field "
                 "boosting, fuzzy matching, flexible scoring, highlighting, filters and text-aware "
                 "aggregations in the same engine. Meilisearch is excellent for fast product search "
-                "but needs app-side fallbacks for deeper analytics. PostgreSQL FTS is useful and "
-                "transparent, but complex ranking and multi-step analytics require more SQL."
+                "and simple facets, but needs app-side fallbacks for deeper analytics. PostgreSQL FTS is useful and "
+                "transparent, but typo-heavy search and multi-step analytics require extra SQL or extensions."
             ),
         }
 
@@ -259,31 +242,29 @@ class WorkflowService:
     def _pg_act_1_product_discovery(self, query: str, limit: int) -> dict[str, Any]:
         sql = """
             WITH q AS (
-                SELECT websearch_to_tsquery('english', %s) AS tsq, %s::text AS raw_query
+                SELECT websearch_to_tsquery('english', %s) AS tsq
             )
             SELECT product_id, title, features, description, category, brand, price,
                    average_rating, rating_number, review_count,
-                   ts_rank_cd(search_vector, q.tsq) + similarity(title, q.raw_query) AS score,
+                   ts_rank_cd(search_vector, q.tsq) AS score,
                    count(*) OVER() AS total,
                    ts_headline('english', title, q.tsq, 'StartSel=<mark>, StopSel=</mark>') AS title_highlight,
                    ts_headline('english', description, q.tsq, 'StartSel=<mark>, StopSel=</mark>, MaxWords=24') AS description_highlight
             FROM products, q
             WHERE search_vector @@ q.tsq
-               OR title %% q.raw_query
-               OR description %% q.raw_query
             ORDER BY score DESC, average_rating DESC, rating_number DESC
             LIMIT %s
         """
         with psycopg.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
-            hits = conn.execute(sql, [query, query, limit]).fetchall()
+            hits = conn.execute(sql, [query, limit]).fetchall()
         return self._pg_result(
             hits,
-            "Full-text search plus trigram similarity helps typo tolerance, but ranking is hand-built in SQL.",
+            "Default PostgreSQL FTS uses the search_vector only; typo-heavy tokens can miss because pg_trgm is not used in this scenario.",
             number_of_requests=1,
             has_aggregation=False,
-            has_custom_ranking=True,
+            has_custom_ranking=False,
             backend_complexity="Medium",
-            score=3,
+            score=2,
         )
 
     def _es_act_2_review_deep_search(self, query: str, limit: int) -> dict[str, Any]:
@@ -316,7 +297,7 @@ class WorkflowService:
         result = self._engine_result(
             "elasticsearch",
             response,
-            f"{sentiment.title()} review search uses summary/text highlights and helpful_votes as a secondary sort.",
+            f"{sentiment.title()} review search uses title/text highlights and helpful_vote as a secondary sort.",
             number_of_requests=1,
             has_aggregation=False,
             has_custom_ranking=False,
@@ -357,7 +338,8 @@ class WorkflowService:
                 SELECT websearch_to_tsquery('english', %s) AS tsq
             )
             SELECT review_id, reviews.product_id, reviews.rating, reviews.title, reviews.text,
-                   helpful_vote, verified_purchase, products.brand, products.category,
+                   helpful_vote, verified_purchase, products.title AS product_title,
+                   products.brand, products.category,
                    ts_rank_cd(review_vector, q.tsq) AS score,
                    count(*) OVER() AS total,
                    ts_headline('english', reviews.title, q.tsq, 'StartSel=<mark>, StopSel=</mark>') AS title_highlight,
@@ -385,46 +367,37 @@ class WorkflowService:
     def _es_act_3_review_analytics(self, query: str, limit: int) -> dict[str, Any]:
         body = {
             "size": 0,
+            "query": {
+                "bool": {
+                    "must": [
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": ["title^2", "text"],
+                            }
+                        }
+                    ],
+                    "filter": [{"range": {"rating": {"lte": 2}}}],
+                }
+            },
             "aggs": {
-                "top_brands_avg_rating_min_20_reviews": {
-                    "terms": {"field": "brand", "size": 10, "min_doc_count": 20, "order": {"avg_rating": "desc"}},
-                    "aggs": {"avg_rating": {"avg": {"field": "rating"}}},
-                },
-                "top_categories_negative_reviews": {
-                    "filter": {"range": {"rating": {"lte": 2}}},
-                    "aggs": {"categories": {"terms": {"field": "category", "size": 10}}},
-                },
-                "overheating_by_brand": {
-                    "filter": {
-                        "multi_match": {
-                            "query": "overheating",
-                            "fields": ["title^2", "text"],
-                        }
-                    },
-                    "aggs": {"brands": {"terms": {"field": "brand", "size": 10}}},
-                },
-                "battery_by_category_avg_rating": {
-                    "filter": {
-                        "multi_match": {
-                            "query": "battery",
-                            "fields": ["title^2", "text"],
-                        }
-                    },
+                "brands": {
+                    "terms": {"field": "brand", "size": 10},
                     "aggs": {
-                        "categories": {
-                            "terms": {"field": "category", "size": 10},
-                            "aggs": {"avg_rating": {"avg": {"field": "rating"}}},
-                        }
+                        "avg_rating": {"avg": {"field": "rating"}},
+                        "total_helpful_votes": {"sum": {"field": "helpful_vote"}},
                     },
                 },
+                "categories": {"terms": {"field": "category", "size": 10}},
                 "rating_distribution": {"terms": {"field": "rating", "size": 5, "order": {"_key": "asc"}}},
+                "avg_rating": {"avg": {"field": "rating"}},
             },
         }
         response = self.es.search(index=REVIEW_INDEX, body=body)
         return self._engine_result(
             "elasticsearch",
             response,
-            "One aggregation request answers all review analytics questions, including text query + group-by combinations.",
+            "One request searches battery-problem reviews, filters negative ratings, and aggregates brand/category/rating metrics.",
             number_of_requests=1,
             has_aggregation=True,
             has_custom_ranking=False,
@@ -434,218 +407,107 @@ class WorkflowService:
         )
 
     def _meili_act_3_review_analytics(self, query: str, limit: int) -> dict[str, Any]:
-        docs = self._meili_all_reviews()
+        response, docs = self._meili_matching_reviews(query)
         analytics = self._aggregate_review_docs(docs)
+        analytics["facets"] = response.get("facetDistribution", {})
         return {
             "engine": "meilisearch",
             "document_type": "analytics",
-            "number_of_requests": max(1, (len(docs) + 999) // 1000),
-            "total": len(docs),
+            "number_of_requests": 1,
+            "total": response.get("estimatedTotalHits", len(docs)),
             "hits": [],
             "aggregations": analytics,
             "has_highlight": False,
             "has_aggregation": True,
             "has_custom_ranking": False,
             "backend_complexity": "High",
-            "note": "Meilisearch does not provide the same nested aggregation model here, so the app fetches review hits and aggregates in Python.",
+            "note": "Meilisearch returns facet counts for matched reviews, while avg rating and helpful-vote metrics are computed in the app.",
             "scorecard": {"overall": 2},
         }
 
     def _pg_act_3_review_analytics(self, query: str, limit: int) -> dict[str, Any]:
         with psycopg.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
-            top_brands = conn.execute(
+            brand_metrics = conn.execute(
                 """
-                SELECT products.brand AS value, round(avg(reviews.rating)::numeric, 2) AS avg_rating,
-                       count(*) AS count
-                FROM reviews
-                JOIN products ON products.product_id = reviews.product_id
-                GROUP BY products.brand
-                HAVING count(*) >= 20
-                ORDER BY avg_rating DESC, count DESC
-                LIMIT 10
-                """
-            ).fetchall()
-            negative_categories = conn.execute(
-                """
-                SELECT products.category AS value, count(*) AS count
-                FROM reviews
-                JOIN products ON products.product_id = reviews.product_id
-                WHERE reviews.rating <= 2
-                GROUP BY products.category
-                ORDER BY count DESC
-                LIMIT 10
-                """
-            ).fetchall()
-            overheating_by_brand = conn.execute(
-                """
-                WITH q AS (SELECT websearch_to_tsquery('english', 'overheating') AS tsq)
-                SELECT products.brand AS value, count(*) AS count
+                WITH q AS (SELECT websearch_to_tsquery('english', %s) AS tsq)
+                SELECT products.brand AS value,
+                       count(*) AS negative_review_count,
+                       round(avg(reviews.rating)::numeric, 2) AS avg_rating,
+                       coalesce(sum(reviews.helpful_vote), 0) AS total_helpful_votes
                 FROM reviews
                 JOIN products ON products.product_id = reviews.product_id, q
                 WHERE review_vector @@ q.tsq
+                  AND reviews.rating <= 2
                 GROUP BY products.brand
-                ORDER BY count DESC
+                ORDER BY negative_review_count DESC, avg_rating ASC
                 LIMIT 10
-                """
+                """,
+                [query],
             ).fetchall()
-            battery_by_category = conn.execute(
+            categories = conn.execute(
                 """
-                WITH q AS (SELECT websearch_to_tsquery('english', 'battery') AS tsq)
-                SELECT products.category AS value, round(avg(reviews.rating)::numeric, 2) AS avg_rating,
-                       count(*) AS count
+                WITH q AS (SELECT websearch_to_tsquery('english', %s) AS tsq)
+                SELECT products.category AS value, count(*) AS negative_review_count
                 FROM reviews
                 JOIN products ON products.product_id = reviews.product_id, q
                 WHERE review_vector @@ q.tsq
+                  AND reviews.rating <= 2
                 GROUP BY products.category
-                ORDER BY count DESC
+                ORDER BY negative_review_count DESC
                 LIMIT 10
-                """
+                """,
+                [query],
             ).fetchall()
             rating_distribution = conn.execute(
                 """
-                SELECT rating AS value, count(*) AS count
+                WITH q AS (SELECT websearch_to_tsquery('english', %s) AS tsq)
+                SELECT reviews.rating AS value, count(*) AS count
                 FROM reviews
-                GROUP BY rating
-                ORDER BY rating
-                """
+                JOIN products ON products.product_id = reviews.product_id, q
+                WHERE review_vector @@ q.tsq
+                  AND reviews.rating <= 2
+                GROUP BY reviews.rating
+                ORDER BY reviews.rating
+                """,
+                [query],
             ).fetchall()
+            summary = conn.execute(
+                """
+                WITH q AS (SELECT websearch_to_tsquery('english', %s) AS tsq)
+                SELECT count(*) AS matched_negative_reviews,
+                       round(avg(reviews.rating)::numeric, 2) AS avg_rating
+                FROM reviews
+                JOIN products ON products.product_id = reviews.product_id, q
+                WHERE review_vector @@ q.tsq
+                  AND reviews.rating <= 2
+                """,
+                [query],
+            ).fetchone()
         return {
             "engine": "postgres",
             "document_type": "analytics",
-            "number_of_requests": 5,
-            "total": 0,
+            "number_of_requests": 4,
+            "total": int((summary or {}).get("matched_negative_reviews") or 0),
             "hits": [],
             "aggregations": {
-                "top_brands_avg_rating_min_20_reviews": top_brands,
-                "top_categories_negative_reviews": negative_categories,
-                "overheating_by_brand": overheating_by_brand,
-                "battery_by_category_avg_rating": battery_by_category,
+                "brands": brand_metrics,
+                "categories": categories,
                 "rating_distribution": rating_distribution,
+                "summary": dict(summary or {}),
             },
             "has_highlight": False,
             "has_aggregation": True,
             "has_custom_ranking": False,
             "backend_complexity": "Medium",
-            "note": "PostgreSQL answers the questions with GROUP BY, but text-query aggregations are separate SQL statements.",
+            "note": "PostgreSQL answers the analytics with FTS, JOIN, and GROUP BY, but this runs as multiple SQL statements on the database.",
             "scorecard": {"overall": 4},
         }
-
-    def _es_act_4_hybrid_recommendation(self, query: str, limit: int) -> dict[str, Any]:
-        expanded = self._expand_intent(query)
-        body = {
-            "size": limit,
-            "query": {
-                "function_score": {
-                    "query": {
-                        "bool": {
-                            "must": [
-                                {
-                                    "multi_match": {
-                                        "query": expanded,
-                                        "fields": [
-                                            "title^5",
-                                            "brand.text^2",
-                                            "category.text^2",
-                                            "features^4",
-                                            "description^3",
-                                            "review_text^2",
-                                        ],
-                                        "fuzziness": "AUTO",
-                                    }
-                                }
-                            ],
-                            "should": self._intent_should_clauses(query),
-                        }
-                    },
-                    "functions": [
-                        {"field_value_factor": {"field": "average_rating", "factor": 1.2, "missing": 1}},
-                        {
-                            "field_value_factor": {
-                                "field": "rating_number",
-                                "modifier": "log1p",
-                                "factor": 0.25,
-                                "missing": 1,
-                            }
-                        },
-                        {"field_value_factor": {"field": "helpful_votes", "modifier": "log1p", "factor": 0.1, "missing": 0}},
-                    ],
-                    "score_mode": "sum",
-                    "boost_mode": "multiply",
-                }
-            },
-            "highlight": {"fields": {"title": {}, "features": {}, "description": {}, "review_text": {}}},
-        }
-        response = self.es.search(index=PRODUCT_INDEX, body=body)
-        return self._engine_result(
-            "elasticsearch",
-            response,
-            "Hybrid-style recommendation combines natural-language intent expansion, boosted fields, review text and rating/review signals.",
-            number_of_requests=1,
-            has_aggregation=False,
-            has_custom_ranking=True,
-            backend_complexity="Low",
-            score=5,
-        )
-
-    def _meili_act_4_hybrid_recommendation(self, query: str, limit: int) -> dict[str, Any]:
-        response = self.meili.index(PRODUCT_INDEX).search(
-            self._expand_intent(query),
-            {
-                "limit": limit,
-                "filter": "average_rating >= 3.5",
-                "sort": ["average_rating:desc", "rating_number:desc"],
-                "attributesToHighlight": ["title", "features", "description", "review_text"],
-                "showRankingScore": True,
-            },
-        )
-        return self._meili_result(
-            response,
-            "Expanded natural-language search works well for retrieval, but scoring is mostly fixed plus sort rules.",
-            number_of_requests=1,
-            has_aggregation=False,
-            has_custom_ranking=True,
-            backend_complexity="Medium",
-            score=3,
-        )
-
-    def _pg_act_4_hybrid_recommendation(self, query: str, limit: int) -> dict[str, Any]:
-        expanded = self._expand_intent(query)
-        sql = """
-            WITH q AS (
-                SELECT websearch_to_tsquery('english', %s) AS tsq
-            )
-            SELECT product_id, title, features, description, category, brand, price,
-                   average_rating, rating_number,
-                   (
-                       ts_rank_cd(search_vector, q.tsq)
-                       * greatest(average_rating, 1)
-                       * ln(greatest(rating_number, 1) + 1)
-                   ) AS score,
-                   count(*) OVER() AS total,
-                   ts_headline('english', title, q.tsq, 'StartSel=<mark>, StopSel=</mark>') AS title_highlight,
-                   ts_headline('english', description, q.tsq, 'StartSel=<mark>, StopSel=</mark>, MaxWords=24') AS description_highlight
-            FROM products, q
-            WHERE search_vector @@ q.tsq
-            ORDER BY score DESC
-            LIMIT %s
-        """
-        with psycopg.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
-            hits = conn.execute(sql, [expanded, limit]).fetchall()
-        return self._pg_result(
-            hits,
-            "PostgreSQL can combine FTS rank with rating/review signals, but semantic tuning lives in application SQL.",
-            number_of_requests=1,
-            has_aggregation=False,
-            has_custom_ranking=True,
-            backend_complexity="High",
-            score=3,
-        )
 
     def _review_rating_filter(self, query: str) -> tuple[dict[str, int], str]:
         is_positive = any(term in query.lower() for term in POSITIVE_REVIEW_TERMS)
         if is_positive:
             return {"gte": 4}, "positive"
-        return {"lte": 3}, "negative"
+        return {"lte": 2}, "negative"
 
     def _meili_review_filter(self, query: str) -> tuple[str, str]:
         rating_filter, sentiment = self._review_rating_filter(query)
@@ -658,26 +520,6 @@ class WorkflowService:
         if "gte" in rating_filter:
             return ">=", rating_filter["gte"], sentiment
         return "<=", rating_filter["lte"], sentiment
-
-    def _expand_intent(self, query: str) -> str:
-        lower = query.lower()
-        additions = []
-        if "meeting" in lower or "noise" in lower or "headphone" in lower:
-            additions.extend(["headphones", "headset", "microphone", "noise cancelling", "battery"])
-        if "charger" in lower or "charges" in lower:
-            additions.extend(["fast charging", "usb c", "charger", "overheat", "cool"])
-        if "camera" in lower or "night" in lower:
-            additions.extend(["camera", "night vision", "easy install", "security"])
-        if "speaker" in lower or "bass" in lower:
-            additions.extend(["bluetooth speaker", "strong bass", "small room", "wireless"])
-        return " ".join([query, *additions])
-
-    def _intent_should_clauses(self, query: str) -> list[dict[str, Any]]:
-        expanded_terms = self._expand_intent(query).split()
-        clauses = [{"match": {"review_text": {"query": term, "boost": 1.2}}} for term in expanded_terms[:12]]
-        if "overheat" in query.lower():
-            clauses.append({"match": {"review_text": {"query": "does not overheat cool reliable", "boost": 2}}})
-        return clauses
 
     def _meili_all_reviews(self) -> list[dict[str, Any]]:
         index = self.meili.index(REVIEW_INDEX)
@@ -693,46 +535,53 @@ class WorkflowService:
             offset += len(hits)
         return docs
 
+    def _meili_matching_reviews(self, query: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        index = self.meili.index(REVIEW_INDEX)
+        response = index.search(
+            query,
+            {
+                "limit": 1000,
+                "filter": "rating <= 2",
+                "facets": ["brand", "category", "rating"],
+            },
+        )
+        return response, response.get("hits", [])
+
     def _aggregate_review_docs(self, docs: list[dict[str, Any]]) -> dict[str, Any]:
-        by_brand: dict[str, list[float]] = defaultdict(list)
-        negative_categories: Counter[str] = Counter()
-        overheating_by_brand: Counter[str] = Counter()
-        battery_by_category: dict[str, list[float]] = defaultdict(list)
+        brand_ratings: dict[str, list[float]] = defaultdict(list)
+        brand_helpful_votes: Counter[str] = Counter()
+        categories: Counter[str] = Counter()
         distribution: Counter[str] = Counter()
         for doc in docs:
             brand = doc.get("brand") or "Unknown"
             category = doc.get("category") or "Electronics"
             rating = float(doc.get("rating") or 0)
-            text = f"{doc.get('title', '')} {doc.get('text', '')}".lower()
-            by_brand[brand].append(rating)
-            if rating <= 2:
-                negative_categories[category] += 1
-            if "overheating" in text or "overheat" in text:
-                overheating_by_brand[brand] += 1
-            if "battery" in text:
-                battery_by_category[category].append(rating)
+            brand_ratings[brand].append(rating)
+            brand_helpful_votes[brand] += int(doc.get("helpful_vote") or 0)
+            categories[category] += 1
             distribution[str(int(rating))] += 1
-        top_brands = [
-            {"value": brand, "avg_rating": round(sum(values) / len(values), 2), "count": len(values)}
-            for brand, values in by_brand.items()
-            if len(values) >= 20
-        ]
-        battery = [
-            {"value": category, "avg_rating": round(sum(values) / len(values), 2), "count": len(values)}
-            for category, values in battery_by_category.items()
-        ]
+        brands = []
+        for brand, values in brand_ratings.items():
+            brands.append(
+                {
+                    "value": brand,
+                    "negative_review_count": len(values),
+                    "avg_rating": round(sum(values) / len(values), 2),
+                    "total_helpful_votes": brand_helpful_votes[brand],
+                }
+            )
         return {
-            "top_brands_avg_rating_min_20_reviews": sorted(top_brands, key=lambda x: (-x["avg_rating"], -x["count"]))[:10],
-            "top_categories_negative_reviews": [
-                {"value": key, "count": count} for key, count in negative_categories.most_common(10)
+            "brands": sorted(brands, key=lambda x: (-x["negative_review_count"], x["avg_rating"]))[:10],
+            "categories": [
+                {"value": key, "negative_review_count": count} for key, count in categories.most_common(10)
             ],
-            "overheating_by_brand": [
-                {"value": key, "count": count} for key, count in overheating_by_brand.most_common(10)
-            ],
-            "battery_by_category_avg_rating": sorted(battery, key=lambda x: -x["count"])[:10],
             "rating_distribution": [
                 {"value": key, "count": distribution[key]} for key in sorted(distribution, key=lambda x: float(x))
             ],
+            "summary": {
+                "matched_negative_reviews": len(docs),
+                "avg_rating": round(sum(float(doc.get("rating") or 0) for doc in docs) / len(docs), 2) if docs else 0,
+            },
         }
 
     def _engine_result(
@@ -908,8 +757,9 @@ class WorkflowService:
                 {
                     "review_id": hit.get("review_id"),
                     "product_id": hit.get("product_id"),
+                    "product_title": hit.get("product_title"),
                     "rating": hit.get("rating"),
-                    "helpful_votes": hit.get("helpful_vote"),
+                    "helpful_vote": hit.get("helpful_vote"),
                     "snippet": text,
                 }
             )
@@ -930,10 +780,9 @@ class WorkflowService:
 
     def _winner_reason(self, scenario_id: str) -> str:
         reasons = {
-            "act-1-product-discovery": "Field boosting, fuzzy query handling and flexible scoring make Elasticsearch strongest for imperfect product keywords.",
-            "act-2-review-deep-search": "Elasticsearch returns deep review matches with highlights, rating filters and helpful-vote tie-break sorting in one request.",
-            "act-3-review-analytics": "Elasticsearch combines text search and aggregations in the same engine without app-side fallback.",
-            "act-4-hybrid-recommendation": "Elasticsearch supports intent expansion, boosted fields, review evidence and business scoring in one relevance model.",
+            "act-1-product-discovery": "Field boosting, fuzzy query handling and flexible scoring make Elasticsearch strongest for the typo-heavy Sony headphone query.",
+            "act-2-review-deep-search": "Elasticsearch returns review evidence with highlights, rating <= 2 filters and helpful-vote sorting in one request.",
+            "act-3-review-analytics": "Elasticsearch combines full-text review search, rating filters and aggregations in the same engine without app-side fallback.",
         }
         return reasons[scenario_id]
 

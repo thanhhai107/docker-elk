@@ -13,3 +13,6 @@ class Review(BaseModel):
     helpful_vote: int = 0
     verified_purchase: bool = False
     timestamp: int | None = None
+    product_title: str = ""
+    brand: str = "Unknown"
+    category: str = "Electronics"

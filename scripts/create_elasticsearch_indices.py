@@ -71,6 +71,7 @@ REVIEW_MAPPING = {
             "review_id": {"type": "keyword"},
             "product_id": {"type": "keyword"},
             "user_id": {"type": "keyword"},
+            "product_title": {"type": "text", "analyzer": "review_text"},
             "brand": {"type": "keyword"},
             "category": {"type": "keyword"},
             "rating": {"type": "double"},

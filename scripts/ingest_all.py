@@ -189,6 +189,7 @@ def enrich_reviews(reviews: list[dict[str, Any]], products: list[dict[str, Any]]
         enriched.append(
             {
                 **review,
+                "product_title": product.get("title", ""),
                 "brand": product.get("brand", "Unknown"),
                 "category": product.get("category", "Electronics"),
             }

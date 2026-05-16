@@ -20,10 +20,9 @@ SERVICE_LABELS = {
     **ENGINE_LABELS,
 }
 SCENARIOS = [
-    ("act-1-product-discovery", "ACT 1: Keyword Product Search"),
-    ("act-2-review-deep-search", "ACT 2: Review Deep Search"),
+    ("act-1-product-discovery", "ACT 1: Product Discovery With Typos"),
+    ("act-2-review-deep-search", "ACT 2: Review Evidence Search"),
     ("act-3-review-analytics", "ACT 3: Review Analytics & Aggregation"),
-    ("act-4-hybrid-recommendation", "ACT 4: Semantic Recommendation"),
 ]
 
 SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
@@ -31,39 +30,39 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
         "elasticsearch": [
             "Target: product index.",
             "Runs boosted multi_match over title, brand, category, features, description, and review_text.",
-            "Uses fuzziness to tolerate typos and near matches.",
-            "Ranks title/features matches higher than description/review_text matches.",
+            "Uses fuzziness for wireles, canclling, and headphnes.",
+            "Ranks title/brand/features matches higher than description/review_text matches.",
         ],
         "meilisearch": [
             "Target: product index.",
             "Runs Meilisearch keyword search over title, brand, category, features, description, and review_text.",
-            "Applies a lightweight product filter.",
             "Uses Meilisearch built-in typo tolerance and ranking rules.",
+            "Can filter/sort when attributes are configured, with less field-level ranking control.",
         ],
         "postgres": [
             "Target: products table.",
             "Converts the query with websearch_to_tsquery.",
-            "Searches products.search_vector and adds trigram similarity on title/description.",
-            "Ranks by full-text score plus similarity.",
+            "Searches products.search_vector with default PostgreSQL FTS.",
+            "Does not use pg_trgm in this scenario, so typo-heavy tokens can miss.",
         ],
     },
     "act-2-review-deep-search": {
         "elasticsearch": [
             "Target: review index.",
             "Searches logical review_title and review_text fields.",
-            "Routes positive queries to rating >= 4 and negative queries to rating <= 3.",
+            "Filters negative evidence to rating <= 2.",
             "Highlights matching review snippets and sorts by relevance then helpful_vote.",
         ],
         "meilisearch": [
             "Target: review index.",
             "Searches review title/text with highlight enabled.",
-            "Applies the same positive/negative rating filter.",
+            "Applies the same rating <= 2 filter.",
             "Sorts matching reviews by helpful_vote.",
         ],
         "postgres": [
             "Target: reviews table joined with products.",
             "Searches reviews.review_vector built from title and text.",
-            "Applies the same rating filter.",
+            "Applies the same rating <= 2 filter.",
             "Uses ts_headline for snippets and sorts by text rank then helpful_vote.",
         ],
     },
@@ -71,40 +70,19 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
         "elasticsearch": [
             "Target: review index.",
             "Runs size=0 analytics queries instead of returning product hits.",
-            "Aggregates by brand, category, and rating.",
-            "Combines text filters such as overheating/battery with aggregations in the same engine.",
+            "Searches battery problem reviews and filters rating <= 2.",
+            "Aggregates by brand, category, rating distribution, average rating, and helpful votes.",
         ],
         "meilisearch": [
             "Target: review index.",
-            "Fetches matching review documents from Meilisearch.",
-            "Aggregates brand/category/rating metrics in the application layer.",
-            "Used as a fallback because nested analytics are limited compared with Elasticsearch.",
+            "Searches battery problem reviews with rating <= 2.",
+            "Returns simple facets for brand/category/rating.",
+            "Computes average rating and helpful-vote metrics in the application layer.",
         ],
         "postgres": [
             "Target: reviews table joined with products.",
-            "Uses SQL GROUP BY for brand, category, and rating distribution.",
-            "Uses review full-text search for topic filters.",
-            "Runs multiple SQL statements for separate analytics questions.",
-        ],
-    },
-    "act-4-hybrid-recommendation": {
-        "elasticsearch": [
-            "Target: product index.",
-            "Expands natural-language intent into related search terms.",
-            "Searches title, brand, category, features, description, and review_text with boosts.",
-            "Uses function_score with rating, review count, and helpful votes.",
-        ],
-        "meilisearch": [
-            "Target: product index.",
-            "Searches an expanded natural-language query.",
-            "Filters for products with acceptable average rating.",
-            "Sorts by average_rating and rating_number as recommendation signals.",
-        ],
-        "postgres": [
-            "Target: products table.",
-            "Searches the expanded query through products.search_vector.",
-            "Combines full-text rank with average_rating and rating_number.",
-            "Returns products ordered by the computed recommendation score.",
+            "Uses review full-text search, JOIN, and GROUP BY.",
+            "Runs multiple SQL statements for brand, category, rating distribution, and summary metrics.",
         ],
     },
 }
@@ -194,6 +172,7 @@ def render_review_hit(hit: dict[str, Any]) -> None:
             [
                 f"Review ID: {hit.get('review_id', 'n/a')}",
                 f"Product ID: {hit.get('product_id', 'n/a')}",
+                f"Product: {hit.get('product_title', 'n/a')}",
                 f"Brand: {hit.get('brand', 'Unknown')}",
                 f"Category: {hit.get('category', 'Electronics')}",
                 f"Rating: {hit.get('rating', 0)}",

@@ -7,19 +7,18 @@ search use case:
 - Meilisearch
 - PostgreSQL Full-Text Search
 
-The demo is organized into four official flows: keyword product search, review
-deep search, review analytics/aggregation, and semantic recommendation.
+The demo is organized into three official flows: typo-heavy product discovery,
+review evidence search, and review analytics/aggregation.
 
 ## Demo Features
 
 - Full-text search across product metadata and review text
-- Keyword product search with Elasticsearch `multi_match`, field boosting, and fuzziness
-- Review deep search with rating filters, helpful-vote tie-breaks, and highlights
+- Product discovery with Elasticsearch `multi_match`, field boosting, and fuzziness
+- Review evidence search with rating filters, helpful-vote tie-breaks, and highlights
 - Filters by brand, category, price, and rating
 - Faceted search and aggregations
 - Keyword highlighting in search results
 - Review analytics by brand, category, rating, and keyword
-- Semantic recommendation search using natural-language intent expansion
 - Benchmarking by total workflow time, not just raw search time
 
 ## Cluster Layout
@@ -188,12 +187,11 @@ http://localhost:8000/docs
 The frontend has one search bar, an ACT selector, a service selector, and a
 result area split by engine.
 
-| ACT | Flow | User action | Demo goal | Main difference |
+| ACT | Flow | User query | Demo goal | Main difference |
 | --- | --- | --- | --- | --- |
-| ACT 1 | Keyword Product Search | Search products with imperfect keywords | Find the right product even when the query has typos, missing terms, or near-synonyms | Fuzzy search, field boosting, and ranking over `title`, `features`, `description` |
-| ACT 2 | Review Deep Search | Search deeply inside review content | Find concrete reviews that mention a problem or user experience | Search over logical `review_title` / `review_text`, with highlight, sentiment/rating filter, and `helpful_vote` |
-| ACT 3 | Review Analytics & Aggregation | Search a topic and summarize insight | Answer which brand/category has the issue and how ratings are distributed | Elasticsearch combines search + aggregation/facet in the same engine; Meilisearch/PostgreSQL need app/SQL work |
-| ACT 4 | Semantic Recommendation | Enter a natural-language need longer than keywords | Recommend products using intent, product fields, review evidence, and rating | Shows the difference between traditional keyword search and smarter search/recommendation |
+| ACT 1 | Product Discovery With Typos | `wireles noise canclling headphnes sony` | Find Sony wireless noise cancelling headphones despite multiple misspellings | Elasticsearch combines fuzzy search, field boosting, and ranking over `title`, `brand`, `features`, `description`, and `review_text` |
+| ACT 2 | Review Evidence Search | `battery dies after a week` | Return low-rating review snippets as evidence, prioritized by helpful votes | Elasticsearch combines review text search, `rating <= 2`, highlighting, and helpful-vote sorting |
+| ACT 3 | Review Analytics & Aggregation | `battery problem` | Find which brands/categories have the most negative battery-problem reviews and rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
 
 Each scenario shows 3 columns:
 
@@ -203,6 +201,41 @@ Elasticsearch | Meilisearch | PostgreSQL FTS
 
 Each column includes timing, request/query count, total hits, highlights,
 aggregations/facets when available, and a short note about that engine.
+
+## Amazon Data Field Mapping
+
+The raw data follows the Amazon Reviews 2023 field layout.
+
+Review source fields used by this demo:
+
+| Raw field | Demo use |
+| --- | --- |
+| `rating` | Review rating filter and rating distribution. |
+| `title` | Review title search and highlight. |
+| `text` | Review evidence search, snippets, and analytics keyword match. |
+| `asin` | Product ID fallback. |
+| `parent_asin` | Primary product join key. |
+| `user_id` | Reviewer ID retained on review documents. |
+| `timestamp` | Review time retained for future filtering. |
+| `verified_purchase` | Filterable review attribute in Meilisearch/PostgreSQL/Elasticsearch. |
+| `helpful_vote` | Helpful-vote sort and aggregation signal. |
+
+Item metadata source fields used by this demo:
+
+| Raw field | Demo use |
+| --- | --- |
+| `parent_asin` | Normalized to `product_id`. Reviews join through `parent_asin` first, then `asin`. |
+| `title` | Product title search, highlight, and product display. |
+| `average_rating` | Product rating signal. |
+| `rating_number` | Product popularity/review-count signal. |
+| `features` | Product search field, boosted in Elasticsearch. |
+| `description` | Product search field and display text. |
+| `price` | Product filter/sort field. |
+| `store` / `details.Brand` / `details.Manufacturer` | Normalized to `brand`. |
+| `categories` / `main_category` | Normalized to `category`. |
+
+The product index also stores a small aggregated `review_text` field from
+matching reviews so ACT 1 can search product metadata plus review language.
 
 ## Main Endpoints
 
@@ -215,10 +248,9 @@ curl "http://localhost:8000/scenarios"
 Run a single scenario:
 
 ```bash
-curl "http://localhost:8000/scenarios/act-1-product-discovery?q=iphne%20charger%20fast%20charging"
-curl "http://localhost:8000/scenarios/act-2-review-deep-search?q=battery%20drains%20fast"
-curl "http://localhost:8000/scenarios/act-3-review-analytics"
-curl "http://localhost:8000/scenarios/act-4-hybrid-recommendation?q=I%20need%20headphones%20for%20online%20meetings%20with%20good%20battery%20and%20noise%20cancellation"
+curl "http://localhost:8000/scenarios/act-1-product-discovery?q=wireles%20noise%20canclling%20headphnes%20sony"
+curl "http://localhost:8000/scenarios/act-2-review-deep-search?q=battery%20dies%20after%20a%20week"
+curl "http://localhost:8000/scenarios/act-3-review-analytics?q=battery%20problem"
 ```
 
 Benchmark all workflows:
