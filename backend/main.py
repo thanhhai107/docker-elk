@@ -51,6 +51,22 @@ def search(
     return services[engine].search(params)
 
 
+@app.get("/search/elasticsearch/as-you-type")
+def elasticsearch_as_you_type(
+    q: str = Query("sony wh"),
+    limit: int = Query(10, ge=1, le=50),
+) -> dict[str, Any]:
+    return ElasticsearchSearchService().search_as_you_type(q, limit)
+
+
+@app.get("/search/elasticsearch/semantic")
+def elasticsearch_semantic(
+    q: str = Query("headphones for flights with quiet cabin noise"),
+    limit: int = Query(10, ge=1, le=50),
+) -> dict[str, Any]:
+    return ElasticsearchSearchService().semantic_search(q, limit)
+
+
 @app.get("/analytics/reviews")
 def review_analytics() -> dict[str, Any]:
     services = [ElasticsearchSearchService(), MeiliSearchService(), PostgresSearchService()]

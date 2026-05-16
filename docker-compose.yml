@@ -51,6 +51,20 @@ services:
     volumes:
       - meilisearch-data:/meili_data
 
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-8.17.0}
+    environment:
+      SERVER_NAME: kibana
+      SERVER_HOST: 0.0.0.0
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      XPACK_SECURITY_ENABLED: "false"
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
   backend:
     build:
       context: .
@@ -62,6 +76,7 @@ services:
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-masterKey}
       POSTGRES_DSN: postgresql://${POSTGRES_USER:-search}:${POSTGRES_PASSWORD:-search_demo}@postgres:5432/${POSTGRES_DB:-amazon_search}
+      ELASTIC_SEMANTIC_INFERENCE_ID: ${ELASTIC_SEMANTIC_INFERENCE_ID:-}
       DATA_DIR: /app/data
     ports:
       - "8000:8000"

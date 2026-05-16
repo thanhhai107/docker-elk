@@ -20,53 +20,53 @@ SERVICE_LABELS = {
     **ENGINE_LABELS,
 }
 SCENARIOS = [
-    ("scenario-1-product-discovery", "Scenario 1: Product Discovery With Typos"),
-    ("scenario-2-review-deep-search", "Scenario 2: Review Evidence Search"),
-    ("scenario-3-review-analytics", "Scenario 3: Review Analytics & Aggregation"),
+    ("scenario-1-full-text-keyword-search", "Scenario 1: Full-text/Keyword Search"),
+    ("scenario-2-semantic-search", "Scenario 2: Semantic Search"),
+    ("scenario-3-analytics-aggregation", "Scenario 3: Analytics & Aggregation"),
 ]
 
 SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
-    "scenario-1-product-discovery": {
+    "scenario-1-full-text-keyword-search": {
+        "elasticsearch": [
+            "Targets: product index and review index.",
+            "Runs boosted fuzzy multi_match over title, brand, category, features, description, and review_text.",
+            "Uses fuzziness for wireles, canclling, and headphnes.",
+            "Runs a second review evidence query with rating <= 2, highlights, and helpful_vote tie-breaks.",
+        ],
+        "meilisearch": [
+            "Targets: product index and review index.",
+            "Runs Meilisearch keyword search over title, brand, category, features, description, and review_text.",
+            "Uses Meilisearch built-in typo tolerance and ranking rules.",
+            "Runs review filtering/highlighting, with less field-level ranking control than Elasticsearch.",
+        ],
+        "postgres": [
+            "Targets: products table and reviews table.",
+            "Converts the query with websearch_to_tsquery.",
+            "Searches products.search_vector with default PostgreSQL FTS.",
+            "Uses ts_headline for review evidence, but typo-heavy product terms can miss without pg_trgm.",
+        ],
+    },
+    "scenario-2-semantic-search": {
         "elasticsearch": [
             "Target: product index.",
-            "Runs boosted multi_match over title, brand, category, features, description, and review_text.",
-            "Uses fuzziness for wireles, canclling, and headphnes.",
-            "Ranks title/brand/features matches higher than description/review_text matches.",
+            "Stores combined product text in semantic_text.",
+            "Uses Elastic's native default or configured inference endpoint.",
+            "Runs semantic retrieval without app-generated or external-provider embeddings.",
         ],
         "meilisearch": [
             "Target: product index.",
-            "Runs Meilisearch keyword search over title, brand, category, features, description, and review_text.",
-            "Uses Meilisearch built-in typo tolerance and ranking rules.",
-            "Can filter/sort when attributes are configured, with less field-level ranking control.",
+            "No OpenAI/Hugging Face/Ollama/REST/user-provided embeddings are configured.",
+            "Runs normal full-text search only.",
+            "Shows the remaining baseline when semantic models are not allowed.",
         ],
         "postgres": [
             "Target: products table.",
-            "Converts the query with websearch_to_tsquery.",
-            "Searches products.search_vector with default PostgreSQL FTS.",
-            "Does not use pg_trgm in this scenario, so typo-heavy tokens can miss.",
+            "PostgreSQL core has no built-in embedding model.",
+            "Runs products.search_vector full-text search.",
+            "No vector extension is used because no embedding source is allowed.",
         ],
     },
-    "scenario-2-review-deep-search": {
-        "elasticsearch": [
-            "Target: review index.",
-            "Searches logical review_title and review_text fields.",
-            "Filters negative evidence to rating <= 2.",
-            "Highlights matching review snippets and sorts by relevance then helpful_vote.",
-        ],
-        "meilisearch": [
-            "Target: review index.",
-            "Searches review title/text with highlight enabled.",
-            "Applies the same rating <= 2 filter.",
-            "Sorts matching reviews by helpful_vote.",
-        ],
-        "postgres": [
-            "Target: reviews table joined with products.",
-            "Searches reviews.review_vector built from title and text.",
-            "Applies the same rating <= 2 filter.",
-            "Uses ts_headline for snippets and sorts by text rank then helpful_vote.",
-        ],
-    },
-    "scenario-3-review-analytics": {
+    "scenario-3-analytics-aggregation": {
         "elasticsearch": [
             "Target: review index.",
             "Runs size=0 analytics queries instead of returning product hits.",
@@ -131,6 +131,7 @@ def format_price(value: Any) -> str:
 
 def render_product_hit(hit: dict[str, Any]) -> None:
     title = first_text(hit, ["title"], ["title"]) or hit.get("product_id", "Untitled product")
+    semantic = first_text(hit, ["semantic_text"], [])
     review = first_text(hit, ["review_text"], ["review_text"])
     description = first_text(hit, ["description"], ["description"])
 
@@ -149,6 +150,9 @@ def render_product_hit(hit: dict[str, Any]) -> None:
         )
     )
 
+    if semantic:
+        st.markdown("**Semantic match**")
+        st.markdown(semantic, unsafe_allow_html=True)
     if review:
         st.markdown("**Review evidence**")
         st.markdown(review, unsafe_allow_html=True)
@@ -218,10 +222,34 @@ def render_result(result: dict[str, Any]) -> None:
     )
     st.write(result.get("note", ""))
 
+    if result.get("semantic_capability"):
+        with st.expander("Semantic capability", expanded=result.get("document_type") == "product"):
+            st.json(result["semantic_capability"])
+
     aggregations = result.get("aggregations") or {}
     if aggregations:
         with st.expander("Aggregation / Facet", expanded=result.get("document_type") == "analytics"):
             st.json(aggregations)
+
+    sections = result.get("sections") or []
+    if sections:
+        for section in sections:
+            st.markdown(f"#### {section.get('title', 'Result section')}")
+            st.caption(
+                " | ".join(
+                    [
+                        f"Query: `{section.get('query', '')}`",
+                        f"Hits: {section.get('total', 0)}",
+                    ]
+                )
+            )
+            hits = section.get("hits", [])
+            if not hits:
+                st.info("No result documents returned for this section.")
+                continue
+            for hit in hits[:5]:
+                render_hit(hit, section.get("document_type", "product"))
+        return
 
     hits = result.get("hits", [])
     if not hits and result.get("document_type") != "analytics":
@@ -234,7 +262,13 @@ def render_result(result: dict[str, Any]) -> None:
 
 def render_service_activities(scenario_id: str, data: dict[str, Any]) -> None:
     st.markdown("## 2. Service Execution Flow")
-    st.markdown(f"**Query:** `{data['query']}`")
+    queries = data.get("queries") or {"query": data["query"]}
+    if len(queries) == 1:
+        st.markdown(f"**Query:** `{next(iter(queries.values()))}`")
+    else:
+        st.markdown("**Queries:**")
+        for name, value in queries.items():
+            st.markdown(f"- `{name}`: `{value}`")
     st.markdown(f"**Scenario:** {data.get('title', '')}")
     st.caption(data.get("summary", ""))
 
@@ -333,15 +367,12 @@ if submitted:
     selected_scenario = scenario_labels[selected_label]
     selected_service = service_labels[selected_service_label]
     cleaned_query = query.strip()
-    if not cleaned_query and selected_scenario != "scenario-3-review-analytics":
-        st.warning("Enter a query before searching this scenario.")
-    else:
-        st.session_state.search_request = {
-            "scenario_id": selected_scenario,
-            "query": cleaned_query or None,
-            "limit": int(limit),
-            "engine": selected_service,
-        }
+    st.session_state.search_request = {
+        "scenario_id": selected_scenario,
+        "query": cleaned_query or None,
+        "limit": int(limit),
+        "engine": selected_service,
+    }
 
 if st.session_state.search_request:
     request = st.session_state.search_request

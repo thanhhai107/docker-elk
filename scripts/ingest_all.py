@@ -47,7 +47,9 @@ REVIEW_COLUMNS = [
     "timestamp",
 ]
 
-DEFAULT_ES_BULK_CHUNK_SIZE = 1000
+DEFAULT_ES_BULK_CHUNK_SIZE = 500
+DEFAULT_ES_REQUEST_TIMEOUT = 600
+DEFAULT_ES_MAX_RETRIES = 5
 DEFAULT_MEILI_CHUNK_SIZE = 2000
 DEFAULT_POSTGRES_CHUNK_SIZE = 5000
 DEFAULT_MAX_REVIEWS_PER_PRODUCT = 5
@@ -64,6 +66,20 @@ def log_done(label: str, started_at: float) -> None:
 
 def format_limit(limit: int | None) -> str:
     return "all (--all)" if limit is None else str(limit)
+
+
+def semantic_text(product: dict[str, Any]) -> str:
+    return " ".join(
+        str(product.get(field) or "")
+        for field in ["title", "brand", "category", "features", "description", "review_text"]
+    )
+
+
+def meili_product_doc(product: dict[str, Any]) -> dict[str, Any]:
+    doc = dict(product)
+    doc.pop("semantic_text", None)
+    doc.pop("title_suggest", None)
+    return doc
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,8 +102,18 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_ES_BULK_CHUNK_SIZE,
         help=f"Elasticsearch bulk chunk size. Default: {DEFAULT_ES_BULK_CHUNK_SIZE}.",
     )
-    parser.add_argument("--es-request-timeout", type=int, default=300)
-    parser.add_argument("--es-max-retries", type=int, default=3)
+    parser.add_argument(
+        "--es-request-timeout",
+        type=int,
+        default=DEFAULT_ES_REQUEST_TIMEOUT,
+        help=f"Elasticsearch request timeout in seconds. Default: {DEFAULT_ES_REQUEST_TIMEOUT}.",
+    )
+    parser.add_argument(
+        "--es-max-retries",
+        type=int,
+        default=DEFAULT_ES_MAX_RETRIES,
+        help=f"Elasticsearch bulk retry count. Default: {DEFAULT_ES_MAX_RETRIES}.",
+    )
     parser.add_argument(
         "--meili-chunk-size",
         type=int,
@@ -222,6 +248,8 @@ def enrich_products(products: list[dict[str, Any]], aggregates: dict[str, dict[s
         merged = {**product, **aggregate}
         merged["average_rating"] = merged.get("average_rating", merged.get("rating", 0))
         merged["rating_number"] = merged.get("rating_number", merged.get("review_count", 0))
+        merged["title_suggest"] = merged.get("title", "")
+        merged["semantic_text"] = semantic_text(merged)
         enriched.append(merged)
     return enriched
 
@@ -403,7 +431,7 @@ def ingest_meilisearch(products: list[dict[str, Any]], reset: bool, chunk_size: 
     log(f"Meilisearch products: indexing {len(products)} docs")
     processed = 0
     for index, chunk in enumerate(chunks(products, chunk_size), start=1):
-        task = products_index.add_documents(chunk, primary_key="product_id")
+        task = products_index.add_documents([meili_product_doc(product) for product in chunk], primary_key="product_id")
         wait_task(client, task)
         processed += len(chunk)
         log_progress("Meilisearch products", index, len(chunk), len(products), chunk_size, processed=processed)

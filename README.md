@@ -6,19 +6,23 @@ search use case:
 - Elasticsearch
 - Meilisearch
 - PostgreSQL Full-Text Search
+- Kibana for Elasticsearch inspection
 
-The demo is organized into three official flows: typo-heavy product discovery,
-review evidence search, and review analytics/aggregation.
+The demo is organized into three official flows: advanced keyword search,
+native semantic search, and search-driven review analytics.
 
 ## Demo Features
 
 - Full-text search across product metadata and review text
 - Product discovery with Elasticsearch `multi_match`, field boosting, and fuzziness
+- Elasticsearch search-as-you-type autocomplete over product titles
+- Elasticsearch native semantic search with `semantic_text` and Elastic inference
 - Review evidence search with rating filters, helpful-vote tie-breaks, and highlights
 - Filters by brand, category, price, and rating
 - Faceted search and aggregations
 - Keyword highlighting in search results
 - Review analytics by brand, category, rating, and keyword
+- Kibana Dev Tools checks for Elasticsearch cluster health, nodes, shards, and index stats
 
 ## Cluster Layout
 
@@ -87,7 +91,7 @@ SSH into the master node and run:
 
 ```bash
 cd /opt/nexus/docker-elk
-docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d --build postgres meilisearch elasticsearch backend frontend
+docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d --build postgres meilisearch elasticsearch kibana backend frontend
 ```
 
 If the helper script is available, you can run:
@@ -134,7 +138,7 @@ PostgreSQL Full-Text Search
 Default ingest chunk sizes are balanced for the current demo workload:
 
 ```text
-Elasticsearch bulk chunk: 1000 documents
+Elasticsearch bulk chunk: 500 documents
 Meilisearch document chunk: 2000 documents
 PostgreSQL executemany chunk: 5000 rows
 ```
@@ -143,10 +147,16 @@ You can override them when needed:
 
 ```bash
 docker compose exec -T backend python scripts/ingest_all.py --reset \
-  --es-bulk-chunk-size 1000 \
+  --es-bulk-chunk-size 500 \
+  --es-request-timeout 600 \
+  --es-max-retries 5 \
   --meili-chunk-size 2000 \
   --postgres-chunk-size 5000
 ```
+
+Elasticsearch uses `semantic_text` for Scenario 2, so product ingest may call
+Elastic inference. Meilisearch and PostgreSQL ingest only lexical/full-text
+fields for that scenario.
 
 By default, review selection is balanced across products:
 
@@ -185,7 +195,9 @@ data/raw/Electronics.jsonl.gz
 ### Ingest real data
 
 ```bash
-docker compose exec -T backend python scripts/ingest_all.py --reset
+docker compose exec -T backend python scripts/ingest_all.py --reset \
+  --product-limit 100000 \
+  --max-reviews-per-product 5
 ```
 
 The ingest script selects product data in file order, then balances review
@@ -213,6 +225,23 @@ API docs:
 http://localhost:8000/docs
 ```
 
+Kibana:
+
+```text
+http://localhost:5601
+```
+
+Use Kibana Dev Tools to inspect Elasticsearch scale and shard distribution:
+
+```http
+GET _cluster/health?pretty
+GET _cat/nodes?v&h=name,node.role,master,ip,heap.percent,ram.percent,cpu,load_1m
+GET _cat/shards/amazon_electronics_products?v
+GET _cat/shards/amazon_electronics_reviews?v
+GET amazon_electronics_products/_stats
+GET _cat/thread_pool/search?v
+```
+
 ## Demo Scenarios
 
 The frontend has one search bar, a scenario selector, a service selector, and a
@@ -220,9 +249,9 @@ result area split by engine.
 
 | Scenario | Flow | User query | Demo goal | Main difference |
 | --- | --- | --- | --- | --- |
-| Scenario 1 | Product Discovery With Typos | `wireles noise canclling headphnes sony` | Find Sony wireless noise cancelling headphones despite multiple misspellings | Elasticsearch combines fuzzy search, field boosting, and ranking over `title`, `brand`, `features`, `description`, and `review_text` |
-| Scenario 2 | Review Evidence Search | `battery dies after a week` | Return low-rating review snippets as evidence, prioritized by helpful votes | Elasticsearch combines review text search, `rating <= 2`, highlighting, and helpful-vote sorting |
-| Scenario 3 | Review Analytics & Aggregation | `battery problem` | Find which brands/categories have the most negative battery-problem reviews and rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
+| Scenario 1 | Full-text/Keyword Search | Product: `wireles noise canclling headphnes sony`; review evidence: `battery dies after a week` | Show keyword search for both typo-heavy product discovery and highlighted review evidence | Elasticsearch combines fuzzy boosted product search with review `rating <= 2`, highlighting, and helpful-vote sorting |
+| Scenario 2 | Semantic Search | `headphones for flights and office calls` | Show what remains when external models and app-generated embeddings are not allowed | Elasticsearch uses `semantic_text` with Elastic inference; Meilisearch and PostgreSQL fall back to full-text search |
+| Scenario 3 | Analytics & Aggregation | `battery problem` | Find which brands/categories have the most negative battery-problem reviews and rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
 
 Each scenario shows 3 columns:
 
@@ -267,6 +296,14 @@ Item metadata source fields used by this demo:
 
 The product index also stores a small aggregated `review_text` field from
 matching reviews so Scenario 1 can search product metadata plus review language.
+For Scenario 2, Elasticsearch stores combined product text in a `semantic_text`
+field. Meilisearch and PostgreSQL do not receive app-generated embeddings in
+this no-external-model setup.
+
+Set `ELASTIC_SEMANTIC_INFERENCE_ID` before creating indices if you want to bind
+the `semantic_text` field to a specific Elastic inference endpoint. If it is not
+set, Elasticsearch uses the default semantic inference endpoint configured for
+the cluster.
 
 ## Main Endpoints
 
@@ -279,9 +316,9 @@ curl "http://localhost:8000/scenarios"
 Run a single scenario:
 
 ```bash
-curl "http://localhost:8000/scenarios/scenario-1-product-discovery?q=wireles%20noise%20canclling%20headphnes%20sony"
-curl "http://localhost:8000/scenarios/scenario-2-review-deep-search?q=battery%20dies%20after%20a%20week"
-curl "http://localhost:8000/scenarios/scenario-3-review-analytics?q=battery%20problem"
+curl "http://localhost:8000/scenarios/scenario-1-full-text-keyword-search?q=wireles%20noise%20canclling%20headphnes%20sony"
+curl "http://localhost:8000/scenarios/scenario-2-semantic-search?q=headphones%20for%20flights%20and%20office%20calls"
+curl "http://localhost:8000/scenarios/scenario-3-analytics-aggregation?q=battery%20problem"
 ```
 
 Basic search endpoints:
@@ -291,3 +328,14 @@ curl "http://localhost:8000/search/elasticsearch?q=bluetooth%20speaker"
 curl "http://localhost:8000/search/meilisearch?q=bluetooth%20speaker"
 curl "http://localhost:8000/search/postgres?q=bluetooth%20speaker"
 ```
+
+Elasticsearch-specific capabilities:
+
+```bash
+curl "http://localhost:8000/search/elasticsearch/as-you-type?q=sony%20wh"
+curl "http://localhost:8000/search/elasticsearch/semantic?q=headphones%20for%20flights%20with%20quiet%20cabin%20noise"
+```
+
+`as-you-type` uses an Elasticsearch `search_as_you_type` field on product
+titles. Semantic search uses Elasticsearch `semantic_text`; re-run ingest with
+`--reset` after mapping changes.

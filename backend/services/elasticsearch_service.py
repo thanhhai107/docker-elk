@@ -61,16 +61,58 @@ class ElasticsearchSearchService:
         response = self.client.search(index=self.index, body=body)
         hits = []
         for item in response["hits"]["hits"]:
-            source = item["_source"]
-            source["score"] = item["_score"]
-            source["highlights"] = item.get("highlight", {})
-            hits.append(source)
+            hits.append(self._hit(item))
 
         return {
             "engine": self.engine,
             "hits": hits,
             "facets": self._facets(response.get("aggregations", {})),
             "total": response["hits"]["total"]["value"],
+        }
+
+    def search_as_you_type(self, q: str, limit: int = 10) -> dict[str, Any]:
+        body = {
+            "size": limit,
+            "query": {
+                "multi_match": {
+                    "query": q,
+                    "type": "bool_prefix",
+                    "fields": [
+                        "title_suggest",
+                        "title_suggest._2gram",
+                        "title_suggest._3gram",
+                    ],
+                }
+            },
+            "highlight": {"fields": {"title_suggest": {}, "title": {}}},
+        }
+        response = self.client.search(index=self.index, body=body)
+        return {
+            "engine": self.engine,
+            "mode": "search_as_you_type",
+            "query": q,
+            "hits": [self._hit(item) for item in response["hits"]["hits"]],
+            "total": response["hits"]["total"]["value"],
+        }
+
+    def semantic_search(self, q: str, limit: int = 10) -> dict[str, Any]:
+        body = {
+            "size": limit,
+            "query": {
+                "match": {
+                    "semantic_text": {"query": q},
+                }
+            },
+            "highlight": {"fields": {"semantic_text": {}, "title": {}, "description": {}, "review_text": {}}},
+        }
+        response = self.client.search(index=self.index, body=body)
+        return {
+            "engine": self.engine,
+            "mode": "semantic_text",
+            "query": q,
+            "hits": [self._hit(item) for item in response["hits"]["hits"]],
+            "total": response["hits"]["total"]["value"],
+            "note": "Uses Elasticsearch semantic_text with the configured Elastic inference endpoint. Reindex after mapping changes.",
         }
 
     def review_analytics(self) -> dict[str, Any]:
@@ -97,6 +139,12 @@ class ElasticsearchSearchService:
         if params.get(f"max_{name}") is not None:
             value["lte"] = params[f"max_{name}"]
         return value
+
+    def _hit(self, item: dict[str, Any]) -> dict[str, Any]:
+        source = dict(item["_source"])
+        source["score"] = item["_score"]
+        source["highlights"] = item.get("highlight", {})
+        return source
 
     def _facets(self, aggs: dict[str, Any]) -> dict[str, Any]:
         return {
