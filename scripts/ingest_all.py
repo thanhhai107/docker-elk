@@ -47,6 +47,10 @@ REVIEW_COLUMNS = [
     "timestamp",
 ]
 
+DEFAULT_ES_BULK_CHUNK_SIZE = 1000
+DEFAULT_MEILI_CHUNK_SIZE = 2000
+DEFAULT_POSTGRES_CHUNK_SIZE = 5000
+
 
 def log(message: str) -> None:
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -67,10 +71,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reviews", type=Path, default=None, help="Review JSONL/GZ path.")
     parser.add_argument("--product-limit", type=int, default=100_000, help="Max products to ingest. Default: 100000.")
     parser.add_argument("--review-limit", type=int, default=100_000, help="Max matching reviews to ingest. Default: 100000.")
-    parser.add_argument("--es-bulk-chunk-size", type=int, default=250)
+    parser.add_argument(
+        "--es-bulk-chunk-size",
+        type=int,
+        default=DEFAULT_ES_BULK_CHUNK_SIZE,
+        help=f"Elasticsearch bulk chunk size. Default: {DEFAULT_ES_BULK_CHUNK_SIZE}.",
+    )
     parser.add_argument("--es-request-timeout", type=int, default=300)
     parser.add_argument("--es-max-retries", type=int, default=3)
-    parser.add_argument("--meili-chunk-size", type=int, default=5000)
+    parser.add_argument(
+        "--meili-chunk-size",
+        type=int,
+        default=DEFAULT_MEILI_CHUNK_SIZE,
+        help=f"Meilisearch add_documents chunk size. Default: {DEFAULT_MEILI_CHUNK_SIZE}.",
+    )
+    parser.add_argument(
+        "--postgres-chunk-size",
+        type=int,
+        default=DEFAULT_POSTGRES_CHUNK_SIZE,
+        help=f"PostgreSQL executemany chunk size. Default: {DEFAULT_POSTGRES_CHUNK_SIZE}.",
+    )
     parser.add_argument(
         "--all",
         action="store_true",
@@ -203,7 +223,12 @@ def ensure_postgres_schema() -> None:
         conn.execute(schema_path.read_text(encoding="utf-8"))
 
 
-def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]], reset: bool) -> None:
+def ingest_postgres(
+    products: list[dict[str, Any]],
+    reviews: list[dict[str, Any]],
+    reset: bool,
+    chunk_size: int,
+) -> None:
     placeholders = ", ".join(["%s"] * len(PRODUCT_COLUMNS))
     product_sql = f"""
         INSERT INTO products ({", ".join(PRODUCT_COLUMNS)})
@@ -238,10 +263,10 @@ def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]
             conn.execute("TRUNCATE TABLE reviews, products RESTART IDENTITY")
         product_rows = [[product.get(column) for column in PRODUCT_COLUMNS] for product in products]
         log(f"PostgreSQL: inserting/upserting {len(product_rows)} products")
-        for index, chunk in enumerate(chunks(product_rows, 5000), start=1):
+        for index, chunk in enumerate(chunks(product_rows, chunk_size), start=1):
             with conn.cursor() as cur:
                 cur.executemany(product_sql, chunk)
-            log_progress("PostgreSQL products", index, len(chunk), len(product_rows), 5000)
+            log_progress("PostgreSQL products", index, len(chunk), len(product_rows), chunk_size)
         known_products = {product["product_id"] for product in products}
         review_rows = [
             [review.get(column) for column in REVIEW_COLUMNS]
@@ -249,10 +274,10 @@ def ingest_postgres(products: list[dict[str, Any]], reviews: list[dict[str, Any]
             if review["product_id"] in known_products
         ]
         log(f"PostgreSQL: inserting {len(review_rows)} reviews")
-        for index, chunk in enumerate(chunks(review_rows, 5000), start=1):
+        for index, chunk in enumerate(chunks(review_rows, chunk_size), start=1):
             with conn.cursor() as cur:
                 cur.executemany(review_sql, chunk)
-            log_progress("PostgreSQL reviews", index, len(chunk), len(review_rows), 5000)
+            log_progress("PostgreSQL reviews", index, len(chunk), len(review_rows), chunk_size)
     log_done("PostgreSQL ingest", started_at)
 
 
@@ -456,10 +481,11 @@ def main() -> int:
         f"max_retries={args.es_max_retries}"
     )
     log(f"Meilisearch chunk_size={args.meili_chunk_size}")
+    log(f"PostgreSQL chunk_size={args.postgres_chunk_size}")
 
     if args.engine in {"all", "postgres"}:
         log("Ingesting PostgreSQL...")
-        ingest_postgres(products, reviews, args.reset)
+        ingest_postgres(products, reviews, args.reset, args.postgres_chunk_size)
 
     if args.engine in {"all", "elasticsearch"}:
         log("Ingesting Elasticsearch products...")

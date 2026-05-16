@@ -131,6 +131,23 @@ Meilisearch
 PostgreSQL Full-Text Search
 ```
 
+Default ingest chunk sizes are balanced for the current demo workload:
+
+```text
+Elasticsearch bulk chunk: 1000 documents
+Meilisearch document chunk: 2000 documents
+PostgreSQL executemany chunk: 5000 rows
+```
+
+You can override them when needed:
+
+```bash
+docker compose exec -T backend python scripts/ingest_all.py --reset \
+  --es-bulk-chunk-size 1000 \
+  --meili-chunk-size 2000 \
+  --postgres-chunk-size 5000
+```
+
 ## 3. Load Real Amazon Electronics Data
 
 Use this path when you want to run the demo with the larger Amazon Electronics
