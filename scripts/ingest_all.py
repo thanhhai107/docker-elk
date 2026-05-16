@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,7 @@ from elasticsearch import Elasticsearch, helpers
 from elasticsearch.helpers import BulkIndexError
 
 from backend.config import settings
-from backend.ingest.normalize import aggregate_reviews, iter_jsonl, normalize_product, normalize_review
+from backend.ingest.pipeline import log, log_done, read_jsonl
 from scripts.create_elasticsearch_indices import create_indices
 from scripts.create_meilisearch_indexes import create_indexes
 
@@ -52,27 +52,10 @@ DEFAULT_ES_REQUEST_TIMEOUT = 600
 DEFAULT_ES_MAX_RETRIES = 5
 DEFAULT_MEILI_CHUNK_SIZE = 2000
 DEFAULT_POSTGRES_CHUNK_SIZE = 5000
-DEFAULT_MAX_REVIEWS_PER_PRODUCT = 5
 
-
-def log(message: str) -> None:
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    print(f"[{timestamp}] {message}", flush=True)
-
-
-def log_done(label: str, started_at: float) -> None:
-    log(f"{label} complete in {time.perf_counter() - started_at:.1f}s")
-
-
-def format_limit(limit: int | None) -> str:
-    return "all (--all)" if limit is None else str(limit)
-
-
-def semantic_text(product: dict[str, Any]) -> str:
-    return " ".join(
-        str(product.get(field) or "")
-        for field in ["title", "brand", "category", "features", "description", "review_text"]
-    )
+PROCESSED_PRODUCTS_FILENAME = "products.jsonl"
+PROCESSED_REVIEWS_FILENAME = "reviews.jsonl"
+MANIFEST_FILENAME = "manifest.json"
 
 
 def meili_product_doc(product: dict[str, Any]) -> dict[str, Any]:
@@ -83,18 +66,26 @@ def meili_product_doc(product: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Ingest products and reviews into all search engines.")
-    parser.add_argument("--products", type=Path, default=None, help="Product JSONL/GZ path.")
-    parser.add_argument("--reviews", type=Path, default=None, help="Review JSONL/GZ path.")
-    parser.add_argument("--product-limit", type=int, default=100_000, help="Max products to ingest. Default: 100000.")
+    parser = argparse.ArgumentParser(
+        description="Ingest pre-processed products and reviews into search engines.",
+    )
     parser.add_argument(
-        "--max-reviews-per-product",
-        type=int,
-        default=DEFAULT_MAX_REVIEWS_PER_PRODUCT,
-        help=(
-            "Max reviews accepted for each selected product. "
-            f"Use 0 to disable this per-product cap. Default: {DEFAULT_MAX_REVIEWS_PER_PRODUCT}."
-        ),
+        "--processed-dir",
+        type=Path,
+        default=None,
+        help="Directory containing processed JSONL produced by prepare_data.py. Default: <data_dir>/processed.",
+    )
+    parser.add_argument(
+        "--products",
+        type=Path,
+        default=None,
+        help="Override processed products JSONL path.",
+    )
+    parser.add_argument(
+        "--reviews",
+        type=Path,
+        default=None,
+        help="Override processed reviews JSONL path.",
     )
     parser.add_argument(
         "--es-bulk-chunk-size",
@@ -127,147 +118,60 @@ def parse_args() -> argparse.Namespace:
         help=f"PostgreSQL executemany chunk size. Default: {DEFAULT_POSTGRES_CHUNK_SIZE}.",
     )
     parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Ingest every product and review found in the selected input files.",
-    )
-    parser.add_argument(
         "--engine",
         choices=["all", "elasticsearch", "meilisearch", "postgres"],
         default="all",
         help="Choose one engine to ingest, or all engines.",
     )
     parser.add_argument("--reset", action="store_true")
-    args = parser.parse_args()
-    if args.all:
-        args.product_limit = None
-        args.max_reviews_per_product = 0
-    return args
+    return parser.parse_args()
 
 
-def default_path(*candidates: Path) -> Path:
-    for path in candidates:
-        if path.exists():
-            return path
-    return candidates[-1]
+def resolve_processed_dir(arg: Path | None) -> Path:
+    if arg is not None:
+        return arg
+    return settings.data_dir / "processed"
 
 
-def load_products_with_tracking(path: Path, limit: int | None) -> list[dict[str, Any]]:
-    products = []
-    scanned = 0
-    next_log_at = 50_000
-    for raw in iter_jsonl(path):
-        scanned += 1
-        product = normalize_product(raw)
-        if product:
-            products.append(product)
-        if len(products) >= next_log_at:
-            log(f"Products load: scanned {scanned} rows, accepted {len(products)} products")
-            next_log_at += 50_000
-        if limit is not None and len(products) >= limit:
-            break
-    log(f"Products load: done scanned {scanned} rows, accepted {len(products)} products")
-    return products
+def load_processed(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    processed_dir = resolve_processed_dir(args.processed_dir)
+    products_path = args.products or processed_dir / PROCESSED_PRODUCTS_FILENAME
+    reviews_path = args.reviews or processed_dir / PROCESSED_REVIEWS_FILENAME
+    manifest_path = processed_dir / MANIFEST_FILENAME
 
+    if not products_path.exists():
+        raise SystemExit(
+            f"Processed products file not found: {products_path}. "
+            "Run scripts/prepare_data.py first."
+        )
+    if not reviews_path.exists():
+        raise SystemExit(
+            f"Processed reviews file not found: {reviews_path}. "
+            "Run scripts/prepare_data.py first."
+        )
 
-def load_reviews_with_tracking(
-    path: Path | None,
-    product_ids: set[str] | None,
-    max_reviews_per_product: int | None,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
-    if not path or not path.exists():
-        log("Reviews load: source not found, accepted 0 reviews")
-        return [], {}
-    reviews = []
-    reviews_by_product: dict[str, int] = {}
-    scanned = 0
-    normalized = 0
-    matched_products = 0
-    skipped_per_product_cap = 0
-    next_log_at = 50_000
-    for raw in iter_jsonl(path):
-        scanned += 1
-        review = normalize_review(raw)
-        if not review:
-            continue
-        normalized += 1
-        if product_ids is not None and review["product_id"] not in product_ids:
-            if scanned >= next_log_at:
-                log(
-                    "Reviews load: "
-                    f"scanned {scanned} rows, normalized {normalized}, "
-                    f"matched products {matched_products}, accepted {len(reviews)} reviews"
-                )
-                next_log_at += 50_000
-            continue
-        matched_products += 1
-        product_review_count = reviews_by_product.get(review["product_id"], 0)
-        if max_reviews_per_product is not None and product_review_count >= max_reviews_per_product:
-            skipped_per_product_cap += 1
-            if scanned >= next_log_at:
-                log(
-                    "Reviews load: "
-                    f"scanned {scanned} rows, normalized {normalized}, "
-                    f"matched products {matched_products}, accepted {len(reviews)} reviews, "
-                    f"skipped per-product cap {skipped_per_product_cap}"
-                )
-                next_log_at += 50_000
-            continue
-        reviews.append(review)
-        reviews_by_product[review["product_id"]] = product_review_count + 1
-        if len(reviews) >= next_log_at:
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             log(
-                "Reviews load: "
-                f"scanned {scanned} rows, normalized {normalized}, "
-                f"matched products {matched_products}, accepted {len(reviews)} reviews, "
-                f"skipped per-product cap {skipped_per_product_cap}"
+                "Manifest: "
+                f"products={manifest.get('product_count')}, "
+                f"reviews={manifest.get('review_count')}, "
+                f"product_limit={manifest.get('product_limit')}, "
+                f"max_reviews_per_product={manifest.get('max_reviews_per_product')}"
             )
-            next_log_at += 50_000
-    log(
-        "Reviews load: done "
-        f"scanned {scanned} rows, normalized {normalized}, "
-        f"matched products {matched_products}, accepted {len(reviews)} reviews, "
-        f"products with reviews {len(reviews_by_product)}, "
-        f"skipped per-product cap {skipped_per_product_cap}"
-    )
-    return reviews, aggregate_reviews(reviews)
+        except (json.JSONDecodeError, OSError) as exc:
+            log(f"Manifest: failed to parse {manifest_path}: {exc}")
+    else:
+        log(f"Manifest: not found at {manifest_path}, continuing without it")
 
-
-def enrich_products(products: list[dict[str, Any]], aggregates: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    enriched = []
-    for product in products:
-        aggregate = aggregates.get(
-            product["product_id"],
-            {
-                "avg_review_rating": 0,
-                "loaded_review_count": 0,
-                "helpful_votes": 0,
-                "review_text": "",
-            },
-        )
-        merged = {**product, **aggregate}
-        merged["average_rating"] = merged.get("average_rating", merged.get("rating", 0))
-        merged["rating_number"] = merged.get("rating_number", merged.get("review_count", 0))
-        merged["title_suggest"] = merged.get("title", "")
-        merged["semantic_text"] = semantic_text(merged)
-        enriched.append(merged)
-    return enriched
-
-
-def enrich_reviews(reviews: list[dict[str, Any]], products: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    product_lookup = {product["product_id"]: product for product in products}
-    enriched = []
-    for review in reviews:
-        product = product_lookup.get(review["product_id"], {})
-        enriched.append(
-            {
-                **review,
-                "product_title": product.get("title", ""),
-                "brand": product.get("brand", "Unknown"),
-                "category": product.get("category", "Electronics"),
-            }
-        )
-    return enriched
+    log(f"Reading processed products from {products_path}")
+    products = read_jsonl(products_path)
+    log(f"Read {len(products)} products")
+    log(f"Reading processed reviews from {reviews_path}")
+    reviews = read_jsonl(reviews_path)
+    log(f"Read {len(reviews)} reviews")
+    return products, reviews
 
 
 def ensure_postgres_schema() -> None:
@@ -284,7 +188,7 @@ def ingest_postgres(
 ) -> None:
     placeholders = ", ".join(["%s"] * len(PRODUCT_COLUMNS))
     product_sql = f"""
-        INSERT INTO products ({", ".join(PRODUCT_COLUMNS)})
+        INSERT INTO products ({', '.join(PRODUCT_COLUMNS)})
         VALUES ({placeholders})
         ON CONFLICT (product_id) DO UPDATE SET
             title = excluded.title,
@@ -303,8 +207,8 @@ def ingest_postgres(
             review_text = excluded.review_text
     """
     review_sql = f"""
-        INSERT INTO reviews ({", ".join(REVIEW_COLUMNS)})
-        VALUES ({", ".join(["%s"] * len(REVIEW_COLUMNS))})
+        INSERT INTO reviews ({', '.join(REVIEW_COLUMNS)})
+        VALUES ({', '.join(['%s'] * len(REVIEW_COLUMNS))})
         ON CONFLICT (review_id) DO NOTHING
     """
     started_at = time.perf_counter()
@@ -421,7 +325,6 @@ def ingest_meilisearch(products: list[dict[str, Any]], reset: bool, chunk_size: 
                 log(f"Meilisearch: deleted {index_name}")
             except Exception:
                 log(f"Meilisearch: {index_name} did not exist or could not be deleted")
-                pass
         log("Meilisearch: creating product/review indexes")
         wait_task(client, client.create_index("amazon_electronics_products", {"primaryKey": "product_id"}))
         wait_task(client, client.create_index("amazon_electronics_reviews", {"primaryKey": "review_id"}))
@@ -491,42 +394,9 @@ def wait_task(client: meilisearch.Client, task: Any) -> None:
 def main() -> int:
     started_at = time.perf_counter()
     args = parse_args()
-    data_dir = settings.data_dir
-    product_path = args.products or default_path(
-        data_dir / "products.jsonl",
-        data_dir / "raw" / "meta_Electronics.jsonl.gz",
-        data_dir / "sample" / "products.jsonl",
-    )
-    review_path = args.reviews or default_path(
-        data_dir / "reviews.jsonl",
-        data_dir / "raw" / "Electronics.jsonl.gz",
-        data_dir / "sample" / "reviews.jsonl",
-    )
-
     log("Starting ingest")
-    log(f"Products: {product_path}")
-    log(f"Reviews:  {review_path if review_path.exists() else 'not found'}")
-    log(f"Product limit: {format_limit(args.product_limit)}")
-    per_product_cap = None if args.max_reviews_per_product <= 0 else args.max_reviews_per_product
-    log(f"Max reviews per product: {format_limit(per_product_cap)}")
-    load_started_at = time.perf_counter()
-    log("Loading products")
-    products = load_products_with_tracking(product_path, args.product_limit)
-    log(f"Loaded {len(products)} products from source")
+    products, reviews = load_processed(args)
     known_products = {product["product_id"] for product in products}
-    log("Loading reviews matching selected products")
-    reviews, aggregates = load_reviews_with_tracking(
-        review_path if review_path.exists() else None,
-        product_ids=known_products,
-        max_reviews_per_product=per_product_cap,
-    )
-    log(f"Loaded {len(reviews)} reviews and {len(aggregates)} product review aggregates")
-    log("Enriching products and reviews")
-    products = enrich_products(products, aggregates)
-    enriched_reviews = enrich_reviews(reviews, products)
-    log_done("Data load and enrichment", load_started_at)
-
-    log(f"Loaded {len(products)} products and {len(reviews)} reviews")
     log(f"Engine: {args.engine}")
     log(
         "Elasticsearch bulk: "
@@ -552,7 +422,7 @@ def main() -> int:
         )
         log("Ingesting Elasticsearch reviews...")
         ingest_elasticsearch_reviews(
-            enriched_reviews,
+            reviews,
             known_products,
             args.es_bulk_chunk_size,
             args.es_request_timeout,
@@ -563,7 +433,7 @@ def main() -> int:
         log("Ingesting Meilisearch products...")
         ingest_meilisearch(products, args.reset, args.meili_chunk_size)
         log("Ingesting Meilisearch reviews...")
-        ingest_meilisearch_reviews(enriched_reviews, known_products, args.meili_chunk_size)
+        ingest_meilisearch_reviews(reviews, known_products, args.meili_chunk_size)
 
     log_done("Ingest", started_at)
     log("Ingest complete")

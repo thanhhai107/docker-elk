@@ -47,7 +47,6 @@ Elasticsearch runs on the master and all worker nodes.
 .
 |-- docker-compose.yml
 |-- data/
-|   |-- download_datasets.py
 |   |-- raw/
 |   |-- sample/
 |   |   |-- products.jsonl
@@ -62,9 +61,11 @@ Elasticsearch runs on the master and all worker nodes.
 |-- frontend/
 |   `-- app.py
 `-- scripts/
+    |-- download_datasets.py
     |-- init_postgres.sql
     |-- create_elasticsearch_indices.py
     |-- create_meilisearch_indexes.py
+    |-- prepare_data.py
     `-- ingest_all.py
 ```
 
@@ -119,15 +120,26 @@ copy plus two replica copies on different Elasticsearch nodes.
 Use this path when you want a quick demo with the committed sample files in
 `data/sample`.
 
-Run this on the master node:
+Loading and ingest are split into two steps. Step 2a reads the source files,
+normalizes/enriches records, and writes processed JSONL plus a manifest under
+`data/processed/`. Step 2b reads those processed files and pushes them into
+each engine. You can re-run step 2b without redoing the slow load step.
+
+Step 2a (load + enrich):
 
 ```bash
 cd /opt/nexus/docker-elk
+docker compose exec -T backend python scripts/prepare_data.py
+```
+
+Step 2b (ingest into engines):
+
+```bash
 docker compose exec -T backend python scripts/ingest_all.py --reset
 ```
 
-This command resets and ingests up to 100,000 products. Matching reviews are
-selected for those products with a per-product cap.
+`prepare_data.py` accepts up to 100,000 products by default. Matching reviews
+are selected for those products with a per-product cap.
 
 ```text
 Elasticsearch
@@ -158,17 +170,27 @@ Elasticsearch uses `semantic_text` for Scenario 2, so product ingest may call
 Elastic inference. Meilisearch and PostgreSQL ingest only lexical/full-text
 fields for that scenario.
 
-By default, review selection is balanced across products:
+By default, `prepare_data.py` balances review selection across products:
 
 ```text
 --product-limit 100000
 --max-reviews-per-product 5
 ```
 
-This means the script accepts the first 100,000 valid products, then scans the
-review file and accepts matching reviews for those products. No selected product
-can contribute more than 5 reviews. Use `--max-reviews-per-product 0` to disable
-the per-product cap.
+This means `prepare_data.py` accepts the first 100,000 valid products, then
+scans the review file and accepts matching reviews for those products. No
+selected product can contribute more than 5 reviews. Use
+`--max-reviews-per-product 0` to disable the per-product cap.
+
+You can re-run a single engine without redoing the load step. For example,
+after fixing an Elasticsearch mapping issue:
+
+```bash
+docker compose exec -T backend python scripts/ingest_all.py --reset --engine elasticsearch
+```
+
+Pass `--processed-dir <path>` to either script if you want a non-default
+location.
 
 ## 3. Load Real Amazon Electronics Data
 
@@ -181,8 +203,8 @@ Run this on the master node:
 
 ```bash
 cd /opt/nexus/docker-elk
-docker compose exec -T backend python data/download_datasets.py
-docker compose exec -T backend python data/download_datasets.py --reviews
+docker compose exec -T backend python scripts/download_datasets.py
+docker compose exec -T backend python scripts/download_datasets.py --reviews
 ```
 
 The files are saved to:
@@ -192,15 +214,17 @@ data/raw/meta_Electronics.jsonl.gz
 data/raw/Electronics.jsonl.gz
 ```
 
-### Ingest real data
+### Prepare and ingest real data
 
 ```bash
-docker compose exec -T backend python scripts/ingest_all.py --reset \
+docker compose exec -T backend python scripts/prepare_data.py \
   --product-limit 100000 \
   --max-reviews-per-product 5
+
+docker compose exec -T backend python scripts/ingest_all.py --reset
 ```
 
-The ingest script selects product data in file order, then balances review
+`prepare_data.py` selects product data in file order, then balances review
 selection across those products:
 
 - `--product-limit 100000`: the first 100,000 valid products from
@@ -304,6 +328,34 @@ Set `ELASTIC_SEMANTIC_INFERENCE_ID` before creating indices if you want to bind
 the `semantic_text` field to a specific Elastic inference endpoint. If it is not
 set, Elasticsearch uses the default semantic inference endpoint configured for
 the cluster.
+
+### Deploy ELSER for semantic search
+
+`scripts/setup_elser.sh` deploys ELSER v2 onto the cluster as the inference
+endpoint named `my-elser` and writes `ELASTIC_SEMANTIC_INFERENCE_ID=my-elser`
+into `/opt/nexus/docker-elk/.env`. The script is idempotent.
+
+Prerequisite: at least one Elasticsearch node must have the `ml` role. The
+Terraform startup script assigns `data,ingest,ml` to `nexus-worker-1` by
+default.
+
+Run on the master VM:
+
+```bash
+cd /opt/nexus/docker-elk
+bash scripts/setup_elser.sh
+
+# Re-create backend so it picks up the new env var
+docker compose --env-file .env --env-file /etc/nexus-elastic.env \
+  up -d --force-recreate backend
+
+# Re-ingest only Elasticsearch (processed JSONL is reused)
+docker compose exec -T backend python scripts/ingest_all.py --reset --engine elasticsearch
+```
+
+Tunables via env vars: `INFERENCE_ID`, `MODEL_ID`, `MIN_ALLOCATIONS`,
+`MAX_ALLOCATIONS`, `NUM_THREADS`, `WAIT_TIMEOUT_SECONDS`, `ES_URL`,
+`ENV_FILE`. Use `MODEL_ID=.elser_model_2` for non-x86_64 hosts.
 
 ## Main Endpoints
 

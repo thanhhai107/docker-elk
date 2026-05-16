@@ -53,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--raw-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "raw",
+        default=Path(__file__).resolve().parent.parent / "data" / "raw",
         help="Target directory for downloaded files. Defaults to data/raw.",
     )
     return parser.parse_args()
