@@ -59,15 +59,16 @@ class ElasticsearchClusterStatusService:
             if not call["ok"]
         }
 
-        allocation_explain = self._allocation_explain()
-        if allocation_explain["status"] == "error":
-            errors["GET _cluster/allocation/explain"] = allocation_explain["message"]
-
         cluster_health_data = self._data(cluster_health, {})
         cat_health_data = self._data(cat_health, [])
         node_rows = self._data(nodes, [])
         shard_rows = self._data(shards, [])
         recovery_rows = self._data(recovery, [])
+        unassigned_shards = self._int(cluster_health_data.get("unassigned_shards"))
+
+        allocation_explain = self._allocation_explain(unassigned_shards)
+        if allocation_explain["status"] == "error":
+            errors["GET _cluster/allocation/explain"] = allocation_explain["message"]
 
         return {
             "elasticsearch_url": self.elasticsearch_url,
@@ -98,12 +99,21 @@ class ElasticsearchClusterStatusService:
             ],
         }
 
-    def _allocation_explain(self) -> dict[str, Any]:
+    def _allocation_explain(self, unassigned_shards: int) -> dict[str, Any]:
+        if unassigned_shards == 0:
+            return {
+                "status": "no_unassigned_shards",
+                "message": "No unassigned shards need allocation explanation.",
+            }
         try:
             body = self._plain(self.client.cluster.allocation_explain(include_disk_info=True))
         except Exception as exc:
             message = self._error_message(exc)
-            if "unable to find any unassigned shards" in message.lower():
+            message_lower = message.lower()
+            if (
+                "unable to find any unassigned shards" in message_lower
+                or "there are no unassigned shards" in message_lower
+            ):
                 return {
                     "status": "no_unassigned_shards",
                     "message": "No unassigned shards need allocation explanation.",

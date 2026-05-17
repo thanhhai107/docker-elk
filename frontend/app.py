@@ -401,8 +401,14 @@ def render_cluster_table(
 ) -> None:
     if not rows:
         return
-    with st.expander(title, expanded=expanded):
-        st.dataframe(cluster_table_rows(rows, columns), use_container_width=True, hide_index=True)
+    st.markdown(f"#### {title}")
+    table_height = min(max(38 * (len(rows) + 1), 120), 900)
+    st.dataframe(
+        cluster_table_rows(rows, columns),
+        use_container_width=True,
+        hide_index=True,
+        height=table_height,
+    )
 
 
 def format_percent(value: Any) -> str:
@@ -559,6 +565,79 @@ def cluster_is_fully_available(data: dict[str, Any], config: dict[str, Any]) -> 
     )
 
 
+def cluster_control_state(data: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    if not config.get("configured") or not config.get("targets"):
+        return {
+            "configured": False,
+            "mode": "Unavailable",
+            "button_label": "Node control unavailable",
+            "button_help": "Elasticsearch node control is not configured.",
+            "disabled": True,
+            "fully_available": False,
+        }
+
+    offline_targets = cluster_control_targets(data, config, online=False)
+    online_targets = cluster_control_targets(data, config, online=True)
+    fully_available = cluster_is_fully_available(data, config)
+    if fully_available:
+        return {
+            "configured": True,
+            "mode": "Healthy",
+            "button_label": "Turn off nodes",
+            "button_help": "Randomly stop one or two online worker nodes.",
+            "disabled": not online_targets,
+            "fully_available": True,
+        }
+    return {
+        "configured": True,
+        "mode": "Degraded mode",
+        "button_label": "Turn on nodes",
+        "button_help": "Start every configured worker node that is currently offline.",
+        "disabled": not offline_targets,
+        "fully_available": False,
+    }
+
+
+def render_cluster_control_action(data: dict[str, Any], config: dict[str, Any]) -> None:
+    if "cluster_control_result" not in st.session_state:
+        st.session_state.cluster_control_result = None
+
+    control = cluster_control_state(data, config)
+    if st.button(
+        control["button_label"],
+        use_container_width=True,
+        key="cluster_state_action_button",
+        disabled=control["disabled"],
+        help=control["button_help"],
+    ):
+        if control["fully_available"]:
+            with st.spinner("Stopping random workers..."):
+                st.session_state.cluster_control_result = run_random_stop_action(data, config)
+        else:
+            with st.spinner("Recovering offline workers..."):
+                st.session_state.cluster_control_result = run_recover_action(data, config)
+        st.rerun()
+
+
+def render_cluster_control_result() -> None:
+    result = st.session_state.get("cluster_control_result")
+    if not result:
+        return
+    targets_label = ", ".join(result.get("targets", [])) or result.get("target", "")
+    status_message = f"{result.get('action', 'action')} {targets_label}".strip()
+    if result.get("ok"):
+        st.success(f"Completed: {status_message}")
+    else:
+        st.error(result.get("message") or f"Failed: {status_message}")
+    failed_results = [item for item in result.get("results", []) if not item.get("ok")]
+    if failed_results:
+        with st.expander("Control errors", expanded=True):
+            for item in failed_results:
+                st.markdown(f"**{item.get('target', 'unknown')}**")
+                error = item.get("error") or item.get("stderr") or "Unknown error"
+                st.code(str(error))
+
+
 def render_cluster_status(data: dict[str, Any], config: dict[str, Any]) -> None:
     summary = data.get("summary", {})
     status = str(summary.get("status") or "unknown").lower()
@@ -571,12 +650,28 @@ def render_cluster_status(data: dict[str, Any], config: dict[str, Any]) -> None:
     online_workers = sum(1 for row in worker_rows if row["status"] == "online")
     worker_total = len(worker_rows)
 
-    st.markdown("## Cluster Status")
-    st.caption(
-        f"Endpoint: `{data.get('elasticsearch_url', 'n/a')}` | "
-        f"Checked at: `{data.get('generated_at', 'n/a')}`"
-    )
-    render_cluster_health_banner(status)
+    title_col, button_col = st.columns([5, 1.6])
+    with title_col:
+        st.markdown("## Cluster Status")
+        st.caption(
+            f"Endpoint: `{data.get('elasticsearch_url', 'n/a')}` | "
+            f"Checked at: `{data.get('generated_at', 'n/a')}`"
+        )
+    with button_col:
+        render_cluster_control_action(data, config)
+
+    health_col, mode_col = st.columns([2, 1])
+    with health_col:
+        render_cluster_health_banner(status)
+    with mode_col:
+        control = cluster_control_state(data, config)
+        if control["fully_available"]:
+            st.success(f"Mode: {control['mode']}")
+        elif control["configured"]:
+            st.warning(f"Mode: {control['mode']}")
+        else:
+            st.info(f"Mode: {control['mode']}")
+    render_cluster_control_result()
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Nodes", node_count, delta=node_delta)
@@ -627,81 +722,6 @@ def render_cluster_status(data: dict[str, Any], config: dict[str, Any]) -> None:
         )
 
 
-def render_cluster_control_panel(data: dict[str, Any], config: dict[str, Any]) -> None:
-    st.markdown("## Cluster Controls")
-    if not config.get("configured"):
-        st.button(
-            "Node control unavailable",
-            use_container_width=True,
-            key="cluster_state_action_button_disabled",
-            disabled=True,
-        )
-        return
-
-    targets = config.get("targets", [])
-    if not targets:
-        st.button(
-            "Node control unavailable",
-            use_container_width=True,
-            key="cluster_state_action_button_no_targets",
-            disabled=True,
-        )
-        return
-
-    if "cluster_control_result" not in st.session_state:
-        st.session_state.cluster_control_result = None
-
-    offline_targets = cluster_control_targets(data, config, online=False)
-    online_targets = cluster_control_targets(data, config, online=True)
-    fully_available = cluster_is_fully_available(data, config)
-    if fully_available:
-        mode_label = "Healthy"
-        button_label = f"Turn off random 1-2 workers ({len(online_targets)} available)"
-        button_help = "The demo will randomly stop one or two online workers."
-        disabled = not online_targets
-    else:
-        mode_label = "Degraded mode"
-        button_label = f"Turn on all offline workers ({len(offline_targets)} offline)"
-        button_help = "The demo will start every configured worker that is currently offline."
-        disabled = not offline_targets
-
-    if fully_available:
-        st.success(f"Mode: {mode_label}")
-    else:
-        st.warning(f"Mode: {mode_label}")
-
-    if st.button(
-        button_label,
-        use_container_width=True,
-        key="cluster_state_action_button",
-        disabled=disabled,
-        help=button_help,
-    ):
-        if fully_available:
-            with st.spinner("Stopping random workers..."):
-                st.session_state.cluster_control_result = run_random_stop_action(data, config)
-        else:
-            with st.spinner("Recovering offline workers..."):
-                st.session_state.cluster_control_result = run_recover_action(data, config)
-        st.rerun()
-
-    result = st.session_state.cluster_control_result
-    if result:
-        targets_label = ", ".join(result.get("targets", [])) or result.get("target", "")
-        status_message = f"{result.get('action', 'action')} {targets_label}".strip()
-        if result.get("ok"):
-            st.success(f"Completed: {status_message}")
-        else:
-            st.error(result.get("message") or f"Failed: {status_message}")
-        failed_results = [item for item in result.get("results", []) if not item.get("ok")]
-        if failed_results:
-            with st.expander("Control errors", expanded=True):
-                for item in failed_results:
-                    st.markdown(f"**{item.get('target', 'unknown')}**")
-                    error = item.get("error") or item.get("stderr") or "Unknown error"
-                    st.code(str(error))
-
-
 def render_cluster_resilience_demo() -> None:
     try:
         data = fetch_cluster_status()
@@ -714,7 +734,6 @@ def render_cluster_resilience_demo() -> None:
         config = {"configured": False, "targets": []}
         st.warning(f"Cluster control config is not available: {request_error_detail(exc)}")
 
-    render_cluster_control_panel(data, config)
     render_cluster_status(data, config)
 
 
@@ -756,11 +775,20 @@ st.markdown(
     div[data-testid="stHorizontalBlock"] div[data-testid="column"]:has(> div > div > div > button[kind="primary"]) > div {
         padding-top: 1.72rem;
     }
-    div[data-testid="stVerticalBlock"] > div:has(.tight-searchbox-anchor) {
-        margin-bottom: -1.05rem;
+    div[data-testid="stVerticalBlock"] > div:has(iframe[title*="streamlit_autorefresh"]) {
+        height: 0 !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
     }
-    iframe[title="streamlit_searchbox.st_searchbox"] {
-        margin-top: -0.85rem;
+    iframe[title*="streamlit_autorefresh"] {
+        display: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(iframe[title*="streamlit_searchbox"]) {
+        margin-top: -0.8rem;
     }
     mark {
         background-color: #fff176;
@@ -794,9 +822,6 @@ with scenario_col:
     selected_label = st.selectbox("Scenario / Feature", list(experience_labels), key="experience_label")
 selected_experience_id = experience_labels[selected_label]
 
-if selected_experience_id == CLUSTER_FEATURE_ID:
-    st_autorefresh(interval=CLUSTER_REFRESH_INTERVAL_MS, key="cluster_resilience_autorefresh")
-
 available_service_labels = (
     {"Elasticsearch": "elasticsearch"}
     if selected_experience_id in FEATURE_IDS
@@ -817,7 +842,6 @@ with button_col:
     st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
     submitted = st.button("Search", use_container_width=True, key="search_button", help="Run search")
 
-st.markdown('<div class="tight-searchbox-anchor"></div>', unsafe_allow_html=True)
 selected_suggestion = st_searchbox(
     suggestion_search,
     placeholder="Type product, review problem, or analytics keyword",
@@ -868,3 +892,6 @@ if st.session_state.search_request:
             request["limit"],
             request.get("engine", "all"),
         )
+
+if selected_experience_id == CLUSTER_FEATURE_ID:
+    st_autorefresh(interval=CLUSTER_REFRESH_INTERVAL_MS, key="cluster_resilience_autorefresh")
