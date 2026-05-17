@@ -343,7 +343,7 @@ class WorkflowService:
         )
 
     def _es_scenario_3_hybrid_search(self, query: str, limit: int) -> dict[str, Any]:
-        from backend.services.gemini_embedding import embed_query
+        from backend.services.vertex_embedding import embed_query
 
         query_vector = embed_query(query)
         body = {
@@ -383,7 +383,7 @@ class WorkflowService:
         result = self._engine_result(
             "elasticsearch",
             response,
-            "Hybrid Search: BM25 text matching (synonym-expanded multi_match) combined with Gemini KNN vector search using Reciprocal Rank Fusion.",
+            "Hybrid Search: BM25 text matching (synonym-expanded multi_match) combined with Vertex AI KNN vector search using Reciprocal Rank Fusion.",
             number_of_requests=1,
             has_aggregation=False,
             has_custom_ranking=True,
@@ -960,7 +960,7 @@ class WorkflowService:
         reasons = {
             "scenario-1-product-search": "Elasticsearch ranks fuzzy multi_match across boosted product fields, so typo-heavy queries still surface the right products.",
             "scenario-2-review-search": "Elasticsearch combines review text match with rating filter, helpful_vote sort, and inline highlights in a single request.",
-            "scenario-3-intent-aware-search": "Elasticsearch uses Gemini embedding vectors combined with BM25 text matching (Hybrid Search) to understand user intent semantically, while Meilisearch and PostgreSQL fall back to lexical search.",
+            "scenario-3-intent-aware-search": "Elasticsearch uses Vertex AI embedding vectors combined with BM25 text matching (Hybrid Search) to understand user intent semantically, while Meilisearch and PostgreSQL fall back to lexical search.",
             "scenario-4-analytics-aggregation": "Elasticsearch combines full-text review search, rating filters and aggregations in the same engine without app-side fallback.",
         }
         return reasons[scenario_id]

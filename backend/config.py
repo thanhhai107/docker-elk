@@ -14,7 +14,9 @@ class Settings:
         "POSTGRES_DSN", "postgresql://search:search_demo@127.0.0.1:5432/amazon_search"
     )
     data_dir: Path = Path(os.getenv("DATA_DIR", "data"))
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gcp_project_id: str = os.getenv("GCP_PROJECT_ID", "")
+    gcp_location: str = os.getenv("GCP_LOCATION", "us-central1")
+    gcp_service_account_json: str | None = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
 
 
 settings = Settings()

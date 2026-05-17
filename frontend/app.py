@@ -71,8 +71,8 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
     "scenario-3-intent-aware-search": {
         "elasticsearch": [
             "Target: product index.",
-            "Hybrid Search: BM25 text matching + Gemini KNN vector search.",
-            "Query is embedded via Gemini text-embedding-004, then matched against product vectors.",
+            "Hybrid Search: BM25 text matching + Vertex AI KNN vector search.",
+            "Query is embedded via Vertex AI text-embedding-004, then matched against product vectors.",
             "Reciprocal Rank Fusion blends lexical and semantic scores for best results.",
         ],
         "meilisearch": [
