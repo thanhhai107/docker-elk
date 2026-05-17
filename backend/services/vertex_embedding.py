@@ -39,13 +39,23 @@ def embed_query(text: str) -> list[float]:
     return result[0].values
 
 
+import datetime
+
 def embed_texts(texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
     _ensure_configured()
     all_embeddings: list[list[float]] = []
-    for i in range(0, len(texts), BATCH_SIZE):
+    total = len(texts)
+    for i in range(0, total, BATCH_SIZE):
         batch = texts[i : i + BATCH_SIZE]
         embeddings = _embed_batch_with_retry(batch, task_type)
         all_embeddings.extend(embeddings)
+        
+        # Log progress every 10 batches (1000 products)
+        if len(all_embeddings) % 1000 == 0 or len(all_embeddings) == total:
+            pct = (len(all_embeddings) / total) * 100
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+            print(f"[{timestamp}] Vertex AI Progress: {len(all_embeddings)}/{total} ({pct:.1f}%)", flush=True)
+            
     return all_embeddings
 
 
