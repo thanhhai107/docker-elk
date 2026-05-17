@@ -305,7 +305,7 @@ def render_service_activities(scenario_id: str, data: dict[str, Any]) -> None:
 
 
 def render_output(data: dict[str, Any]) -> None:
-    st.markdown("## 3. Output")
+    st.markdown("## Output")
     results = data["results"]
     if len(results) == 1:
         render_result(results[0])
@@ -327,7 +327,6 @@ def run_search(scenario_id: str, selected_query: str | None, limit: int, engine:
         st.error(f"Backend is not ready: {exc}")
         return
 
-    render_service_activities(scenario_id, data)
     render_output(data)
 
 
@@ -362,7 +361,7 @@ if "selected_query" not in st.session_state:
 def suggestion_search(prefix: str) -> list[tuple[str, str]]:
     return [(title, title) for title in fetch_suggestions(prefix, limit=8)]
 
-st.markdown("## 1. Input & Search Options")
+st.markdown("## Input")
 scenario_col, service_col, limit_col, button_col = st.columns([3.6, 3.0, 1.6, 1.2])
 with scenario_col:
     selected_label = st.selectbox("Scenario", list(scenario_labels), key="scenario_label")
@@ -371,7 +370,8 @@ with service_col:
 with limit_col:
     limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1, key="limit_value")
 with button_col:
-    submitted = st.button("🔍 Search", use_container_width=True, key="search_button")
+    st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+    submitted = st.button("🔍", use_container_width=True, key="search_button", help="Run search")
 
 selected_suggestion = st_searchbox(
     suggestion_search,
