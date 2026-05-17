@@ -124,7 +124,7 @@ def parse_args() -> argparse.Namespace:
         help="Choose one engine to ingest, or all engines.",
     )
     parser.add_argument("--reset", action="store_true")
-    parser.add_argument("--skip-embeddings", action="store_true", help="Skip Gemini embedding generation for Elasticsearch products.")
+    parser.add_argument("--skip-embeddings", action="store_true", help="Skip Vertex AI embedding generation for Elasticsearch products.")
     return parser.parse_args()
 
 
@@ -251,14 +251,14 @@ def _build_embedding_text(product: dict[str, Any]) -> str:
 
 
 def _generate_embeddings(products: list[dict[str, Any]]) -> None:
-    from backend.services.gemini_embedding import embed_texts
+    from backend.services.vertex_embedding import embed_texts
 
     texts = [_build_embedding_text(p) for p in products]
-    log(f"Generating Gemini embeddings for {len(texts)} products...")
+    log(f"Generating Vertex AI embeddings for {len(texts)} products...")
     embeddings = embed_texts(texts)
     for product, embedding in zip(products, embeddings):
         product["title_embedding"] = embedding
-    log(f"Gemini embeddings generated for {len(embeddings)} products")
+    log(f"Vertex AI embeddings generated for {len(embeddings)} products")
 
 
 def ingest_elasticsearch(
@@ -276,9 +276,9 @@ def ingest_elasticsearch(
         try:
             _generate_embeddings(products)
         except Exception as exc:
-            log(f"WARNING: Gemini embedding failed ({exc}), continuing without embeddings")
+            log(f"WARNING: Vertex AI embedding failed ({exc}), continuing without embeddings")
     else:
-        log("Skipping Gemini embedding generation (--skip-embeddings)")
+        log("Skipping Vertex AI embedding generation (--skip-embeddings)")
     client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
     actions = [
         {"_index": "amazon_electronics_products", "_id": product["product_id"], "_source": product}
