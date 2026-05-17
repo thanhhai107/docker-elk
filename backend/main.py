@@ -4,6 +4,9 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 
+from backend.services.cluster_control_service import ElasticsearchClusterControlService
+from backend.services.cluster_control_service import NodeAction
+from backend.services.cluster_status_service import ElasticsearchClusterStatusService
 from backend.services.elasticsearch_service import ElasticsearchSearchService
 from backend.services.meilisearch_service import MeiliSearchService
 from backend.services.postgres_service import PostgresSearchService
@@ -75,6 +78,29 @@ def elasticsearch_semantic_feature(
     return run_elasticsearch_semantic_search(q, limit)
 
 
+@app.get("/features/elasticsearch/cluster-status")
+def elasticsearch_cluster_status_feature() -> dict[str, Any]:
+    return ElasticsearchClusterStatusService().snapshot()
+
+
+@app.get("/features/elasticsearch/cluster-control")
+def elasticsearch_cluster_control_config() -> dict[str, Any]:
+    return ElasticsearchClusterControlService().config()
+
+
+@app.post("/features/elasticsearch/cluster-control/{target_id}/{action}")
+def elasticsearch_cluster_control_action(target_id: str, action: NodeAction) -> dict[str, Any]:
+    try:
+        result = ElasticsearchClusterControlService().run(target_id, action)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown Elasticsearch target: {target_id}") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not result["ok"]:
+        raise HTTPException(status_code=500, detail=result)
+    return result
+
+
 def run_elasticsearch_semantic_search(q: str, limit: int) -> dict[str, Any]:
     try:
         return ElasticsearchSearchService().semantic_search(q, limit)
@@ -109,7 +135,13 @@ def list_features() -> dict[str, Any]:
                 "title": "Feature: Elasticsearch Semantic Search",
                 "engine": "elasticsearch",
                 "path": "/features/elasticsearch/semantic-search",
-            }
+            },
+            {
+                "id": "feature-elasticsearch-cluster-resilience",
+                "title": "Feature: Elasticsearch Cluster Resilience",
+                "engine": "elasticsearch",
+                "path": "/features/elasticsearch/cluster-status",
+            },
         ]
     }
 

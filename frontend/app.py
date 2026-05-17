@@ -10,6 +10,8 @@ from streamlit_searchbox import st_searchbox
 
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+SEMANTIC_FEATURE_ID = "feature-elasticsearch-semantic-search"
+CLUSTER_FEATURE_ID = "feature-elasticsearch-cluster-resilience"
 
 ENGINE_LABELS = {
     "elasticsearch": "Elasticsearch",
@@ -26,11 +28,35 @@ SCENARIOS = [
     ("scenario-3-analytics-aggregation", "Scenario 3: Analytics & Aggregation"),
 ]
 FEATURES = [
-    ("feature-elasticsearch-semantic-search", "Feature: Elasticsearch Semantic Search"),
+    (SEMANTIC_FEATURE_ID, "Feature: Elasticsearch Semantic Search"),
+    (CLUSTER_FEATURE_ID, "Feature: Elasticsearch Cluster Resilience"),
 ]
 FEATURE_IDS = {feature_id for feature_id, _label in FEATURES}
 EXPERIENCES = SCENARIOS + FEATURES
 FEATURE_TITLES = dict(FEATURES)
+CLUSTER_DEMO_STEPS = [
+    {
+        "id": "full",
+        "label": "Step 1: Full 5-node cluster",
+        "expected_nodes": 5,
+        "command": (
+            'curl "http://localhost:9200/_cluster/health?pretty"\n'
+            'curl "http://localhost:9200/_cat/nodes?v&h=name,node.role,master,ip"'
+        ),
+    },
+    {
+        "id": "degraded",
+        "label": "Step 2: Stop one Elasticsearch node",
+        "expected_nodes": 4,
+        "command": "cd /opt/nexus/docker-elk && docker compose stop elasticsearch",
+    },
+    {
+        "id": "restored",
+        "label": "Step 3: Start the node again",
+        "expected_nodes": 5,
+        "command": "cd /opt/nexus/docker-elk && docker compose start elasticsearch",
+    },
+]
 
 SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
     "scenario-1-product-search": {
@@ -109,6 +135,12 @@ def get_json(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     return response.json()
 
 
+def post_json(path: str) -> dict[str, Any]:
+    response = requests.post(f"{BACKEND_URL}{path}", timeout=120)
+    response.raise_for_status()
+    return response.json()
+
+
 def request_error_detail(exc: requests.RequestException) -> str:
     response = getattr(exc, "response", None)
     if response is None:
@@ -118,6 +150,17 @@ def request_error_detail(exc: requests.RequestException) -> str:
     except ValueError:
         return str(exc)
     detail = payload.get("detail")
+    if isinstance(detail, dict):
+        lines = []
+        if detail.get("command"):
+            lines.append(f"Command: {detail['command']}")
+        if detail.get("stderr"):
+            lines.append(f"stderr: {detail['stderr']}")
+        if detail.get("stdout"):
+            lines.append(f"stdout: {detail['stdout']}")
+        if lines:
+            return "\n".join(lines)
+        return str(detail)
     if detail:
         return str(detail)
     return str(exc)
@@ -137,6 +180,18 @@ def fetch_suggestions(prefix: str, limit: int = 5) -> list[str]:
         if title and title not in titles:
             titles.append(title)
     return titles[:limit]
+
+
+def fetch_cluster_status() -> dict[str, Any]:
+    return get_json("/features/elasticsearch/cluster-status")
+
+
+def fetch_cluster_control_config() -> dict[str, Any]:
+    return get_json("/features/elasticsearch/cluster-control")
+
+
+def run_cluster_control_action(target_id: str, action: str) -> dict[str, Any]:
+    return post_json(f"/features/elasticsearch/cluster-control/{target_id}/{action}")
 
 
 def clean_highlight(value: Any) -> str:
@@ -357,12 +412,295 @@ def render_output(data: dict[str, Any]) -> None:
             render_result(result)
 
 
+def cluster_table_rows(rows: list[dict[str, Any]], columns: list[str]) -> list[dict[str, Any]]:
+    return [{column: row.get(column, "") for column in columns} for row in rows]
+
+
+def render_cluster_table(
+    title: str,
+    rows: list[dict[str, Any]],
+    columns: list[str],
+    *,
+    expanded: bool = False,
+) -> None:
+    with st.expander(title, expanded=expanded):
+        if not rows:
+            st.info("No rows returned.")
+            return
+        st.dataframe(cluster_table_rows(rows, columns), use_container_width=True, hide_index=True)
+
+
+def format_percent(value: Any) -> str:
+    try:
+        return f"{float(value):.1f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def render_cluster_health_banner(status: str) -> None:
+    label = f"Cluster health: {status.upper()}"
+    if status == "green":
+        st.success(label)
+    elif status == "yellow":
+        st.warning(label)
+    elif status in {"red", "unreachable"}:
+        st.error(label)
+    else:
+        st.info(label)
+
+
+def render_allocation_explain(allocation_explain: dict[str, Any]) -> None:
+    status = allocation_explain.get("status", "unknown")
+    expanded = status == "error"
+    with st.expander("GET _cluster/allocation/explain", expanded=expanded):
+        if status == "no_unassigned_shards":
+            st.info(allocation_explain.get("message", "No unassigned shards need allocation explanation."))
+            return
+        if status == "error":
+            st.error(allocation_explain.get("message", "Allocation explain failed."))
+            return
+        body = allocation_explain.get("body", {})
+        explanation = body.get("explanation")
+        if explanation:
+            st.write(explanation)
+        st.json(body)
+
+
+def render_cluster_status(data: dict[str, Any], expected_nodes: int) -> None:
+    summary = data.get("summary", {})
+    status = str(summary.get("status") or "unknown").lower()
+    node_count = int(summary.get("node_count") or 0)
+    node_delta = None
+    if node_count != expected_nodes:
+        node_delta = f"{node_count - expected_nodes:+d} vs expected"
+
+    st.markdown("## Cluster Status")
+    st.caption(
+        f"Endpoint: `{data.get('elasticsearch_url', 'n/a')}` | "
+        f"Checked at: `{data.get('generated_at', 'n/a')}`"
+    )
+    render_cluster_health_banner(status)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Nodes", node_count, delta=node_delta)
+    m2.metric("Data nodes", summary.get("data_node_count", 0))
+    m3.metric("Demo shards", summary.get("demo_shard_count", 0))
+    m4.metric("Active shards", summary.get("active_shards", 0))
+
+    m5, m6, m7, m8 = st.columns(4)
+    m5.metric("Active shard %", format_percent(summary.get("active_shards_percent")))
+    m6.metric("Unassigned", summary.get("unassigned_shards", 0))
+    m7.metric("Relocating", summary.get("relocating_shards", 0))
+    m8.metric("Recovery active", summary.get("recovery_active", 0))
+
+    state_counts = summary.get("shard_state_counts") or {}
+    if state_counts:
+        st.caption(
+            "Shard states: "
+            + ", ".join(f"{state}: {count}" for state, count in state_counts.items())
+        )
+
+    errors = data.get("errors") or {}
+    if errors:
+        with st.expander("Probe errors", expanded=True):
+            for label, error in errors.items():
+                st.error(f"{label}: {error}")
+
+    render_cluster_table(
+        "GET _cat/nodes?v",
+        data.get("nodes", []),
+        ["name", "node.role", "master", "ip"],
+        expanded=True,
+    )
+    render_cluster_table(
+        "GET _cat/shards/amazon_electronics_*?v",
+        data.get("shards", []),
+        ["index", "shard", "prirep", "state", "docs", "store", "ip", "node", "unassigned.reason"],
+        expanded=True,
+    )
+    render_cluster_table(
+        "GET _cat/allocation?v",
+        data.get("allocation", []),
+        ["node", "shards", "disk.indices", "disk.used", "disk.avail", "disk.total", "disk.percent", "ip"],
+    )
+    render_allocation_explain(data.get("allocation_explain", {}))
+    render_cluster_table(
+        "GET _cat/recovery/amazon_electronics_*?v",
+        data.get("recovery", []),
+        ["index", "shard", "time", "type", "stage", "source_node", "target_node", "files_percent", "bytes_percent"],
+        expanded=bool(summary.get("recovery_active")),
+    )
+
+    with st.expander("GET _cluster/health?pretty"):
+        st.json(data.get("cluster_health", {}))
+    with st.expander("GET _cat/health?v"):
+        cat_health = data.get("cat_health", [])
+        if cat_health:
+            st.dataframe(cat_health, use_container_width=True, hide_index=True)
+        else:
+            st.info("No health row returned.")
+
+
+def render_cluster_search_test() -> None:
+    if "cluster_search_request" not in st.session_state:
+        st.session_state.cluster_search_request = None
+
+    st.markdown("## Search Test")
+    query_col, limit_col, button_col = st.columns([5, 1.4, 1.8])
+    with query_col:
+        query = st.text_input(
+            "Elasticsearch query",
+            value="wireless noise cancelling headphones",
+            key="cluster_search_query",
+        )
+    with limit_col:
+        limit = st.number_input(
+            "Top results",
+            min_value=3,
+            max_value=20,
+            value=5,
+            step=1,
+            key="cluster_search_limit",
+        )
+    with button_col:
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        run_search_button = st.button("Run search", use_container_width=True, key="cluster_search_button")
+
+    if run_search_button:
+        selected_query = query.strip()
+        if not selected_query:
+            st.warning("Please enter a query before searching.")
+            st.session_state.cluster_search_request = None
+        else:
+            st.session_state.cluster_search_request = {
+                "query": selected_query,
+                "limit": int(limit),
+            }
+
+    request = st.session_state.cluster_search_request
+    if not request:
+        return
+
+    try:
+        data = get_json(
+            "/scenarios/scenario-1-product-search",
+            {
+                "q": request["query"],
+                "limit": request["limit"],
+                "engine": "elasticsearch",
+            },
+        )
+    except requests.RequestException as exc:
+        st.error(f"Backend is not ready: {request_error_detail(exc)}")
+        return
+
+    results = data.get("results", [])
+    if results:
+        render_result(results[0])
+
+
+def render_cluster_control_panel(fallback_command: str) -> None:
+    st.markdown("## Node Control")
+    try:
+        config = fetch_cluster_control_config()
+    except requests.RequestException as exc:
+        st.warning(f"Cluster control config is not available: {request_error_detail(exc)}")
+        st.code(fallback_command, language="bash")
+        return
+
+    if not config.get("configured"):
+        st.info(
+            "Automatic node control is disabled. Configure ELASTICSEARCH_CONTROL_ENABLED "
+            "and ELASTICSEARCH_CONTROL_TARGETS on the backend to enable the buttons."
+        )
+        st.code(fallback_command, language="bash")
+        return
+
+    targets = config.get("targets", [])
+    if not targets:
+        st.warning("No Elasticsearch control targets are configured.")
+        st.code(fallback_command, language="bash")
+        return
+
+    if "cluster_control_result" not in st.session_state:
+        st.session_state.cluster_control_result = None
+
+    target_options = {
+        f"{target.get('label', target['id'])} ({target.get('host', target['id'])})": target["id"]
+        for target in targets
+    }
+    target_col, stop_col, start_col, restart_col = st.columns([4, 1.4, 1.4, 1.4])
+    with target_col:
+        selected_target_label = st.selectbox("Target node", list(target_options), key="cluster_control_target")
+    selected_target = target_options[selected_target_label]
+
+    action = None
+    with stop_col:
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        if st.button("Stop", use_container_width=True, key="cluster_stop_button"):
+            action = "stop"
+    with start_col:
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        if st.button("Start", use_container_width=True, key="cluster_start_button"):
+            action = "start"
+    with restart_col:
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        if st.button("Restart", use_container_width=True, key="cluster_restart_button"):
+            action = "restart"
+
+    if action:
+        with st.spinner(f"Running {action} on {selected_target}..."):
+            try:
+                st.session_state.cluster_control_result = run_cluster_control_action(selected_target, action)
+            except requests.RequestException as exc:
+                st.session_state.cluster_control_result = None
+                st.error(f"Cluster control failed: {request_error_detail(exc)}")
+
+    result = st.session_state.cluster_control_result
+    if result:
+        status_message = f"{result.get('action', 'action')} {result.get('target', '')}"
+        if result.get("ok"):
+            st.success(f"Completed: {status_message}")
+        else:
+            st.error(f"Failed: {status_message}")
+        with st.expander("Last control command"):
+            st.code(result.get("command", ""), language="bash")
+            if result.get("stdout"):
+                st.markdown("**stdout**")
+                st.code(result["stdout"])
+            if result.get("stderr"):
+                st.markdown("**stderr**")
+                st.code(result["stderr"])
+
+
+def render_cluster_resilience_demo() -> None:
+    step_labels = {step["label"]: step for step in CLUSTER_DEMO_STEPS}
+    selected_step_label = st.radio(
+        "Demo step",
+        list(step_labels),
+        horizontal=True,
+        key="cluster_demo_step",
+    )
+    selected_step = step_labels[selected_step_label]
+
+    render_cluster_control_panel(selected_step["command"])
+
+    try:
+        data = fetch_cluster_status()
+    except requests.RequestException as exc:
+        st.error(f"Backend is not ready: {request_error_detail(exc)}")
+        return
+
+    render_cluster_status(data, int(selected_step["expected_nodes"]))
+    render_cluster_search_test()
+
+
 def run_search(experience_id: str, selected_query: str | None, limit: int, engine: str) -> None:
     try:
         params: dict[str, Any] = {"limit": limit}
         if selected_query:
             params["q"] = selected_query
-        if experience_id in FEATURE_IDS:
+        if experience_id == SEMANTIC_FEATURE_ID:
             result = get_json("/features/elasticsearch/semantic-search", params)
             data = {
                 "scenario_id": experience_id,
@@ -413,14 +751,29 @@ if "search_request" not in st.session_state:
 if "selected_query" not in st.session_state:
     st.session_state.selected_query = ""
 
+
 def suggestion_search(prefix: str) -> list[tuple[str, str]]:
     return [(title, title) for title in fetch_suggestions(prefix, limit=8)]
+
 
 st.markdown("## Input")
 scenario_col, service_col, limit_col, button_col = st.columns([3.6, 3.0, 1.6, 1.2])
 with scenario_col:
     selected_label = st.selectbox("Scenario / Feature", list(experience_labels), key="experience_label")
 selected_experience_id = experience_labels[selected_label]
+
+if selected_experience_id == CLUSTER_FEATURE_ID:
+    available_service_labels = {"Elasticsearch": "elasticsearch"}
+    if st.session_state.get("service_label") not in available_service_labels:
+        st.session_state.service_label = "Elasticsearch"
+    with service_col:
+        st.selectbox("Service", list(available_service_labels), key="service_label", disabled=True)
+    with button_col:
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        st.button("Refresh", use_container_width=True, key="cluster_refresh_button")
+    render_cluster_resilience_demo()
+    st.stop()
+
 available_service_labels = (
     {"Elasticsearch": "elasticsearch"}
     if selected_experience_id in FEATURE_IDS
@@ -439,7 +792,7 @@ with limit_col:
     limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1, key="limit_value")
 with button_col:
     st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-    submitted = st.button("🔍", use_container_width=True, key="search_button", help="Run search")
+    submitted = st.button("Search", use_container_width=True, key="search_button", help="Run search")
 
 selected_suggestion = st_searchbox(
     suggestion_search,

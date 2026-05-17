@@ -25,6 +25,7 @@ search inside Elasticsearch.
 - Keyword highlighting in search results
 - Review analytics by brand, category, rating, and keyword
 - Kibana Dev Tools checks for Elasticsearch cluster health, nodes, shards, and index stats
+- Streamlit cluster resilience feature for 5-node, 4-node, and recovery demos
 
 ## Cluster Layout
 
@@ -116,6 +117,63 @@ You should see 5 Elasticsearch nodes. Product and review shards should be
 distributed across the worker data nodes. The demo indices are created with
 `number_of_shards=3` and `number_of_replicas=2`, so each shard has one primary
 copy plus two replica copies on different Elasticsearch nodes.
+
+### Streamlit cluster resilience demo
+
+Open Streamlit and select `Feature: Elasticsearch Cluster Resilience`.
+The page refreshes the same checks used in Kibana Dev Tools:
+
+```text
+GET _cat/health?v
+GET _cluster/health?pretty
+GET _cat/nodes?v
+GET _cat/shards/amazon_electronics_*?v
+GET _cat/allocation?v
+GET _cluster/allocation/explain
+GET _cat/recovery/amazon_electronics_*?v
+```
+
+Use the step selector while running the node action manually on the target VM,
+or enable backend SSH control to use the Stop/Start buttons in Streamlit.
+
+```bash
+cd /opt/nexus/docker-elk && docker compose stop elasticsearch
+cd /opt/nexus/docker-elk && docker compose start elasticsearch
+```
+
+The same page includes an Elasticsearch product search test so you can show
+search behavior when the cluster has 5 nodes, 4 nodes, and after recovery.
+
+To enable the Streamlit Stop/Start buttons, configure the backend with an
+allowlist of worker hosts:
+
+```env
+ELASTICSEARCH_CONTROL_ENABLED=true
+ELASTICSEARCH_CONTROL_TARGETS=worker-1=nexus-worker-1,worker-2=nexus-worker-2,worker-3=nexus-worker-3,worker-4=nexus-worker-4
+ELASTICSEARCH_CONTROL_SSH_USER=<ssh-user>
+ELASTICSEARCH_CONTROL_SSH_KEY=/run/secrets/es-control-ssh-key
+ELASTICSEARCH_CONTROL_COMPOSE_DIR=/opt/nexus/docker-elk
+ELASTICSEARCH_CONTROL_COMPOSE_ENV_FILES=.env,/etc/nexus-elastic.env
+```
+
+Mount the SSH private key into the backend container, for example with
+`docker-compose.override.yml`:
+
+```yaml
+services:
+  backend:
+    volumes:
+      - ./data:/app/data
+      - ./gcp-key.json:/app/gcp-key.json:ro
+      - /home/<ssh-user>/.ssh/id_rsa:/run/secrets/es-control-ssh-key:ro
+```
+
+The backend image includes `openssh-client`. Rebuild the backend after changing
+the Dockerfile or control env:
+
+```bash
+docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d --build backend frontend
+```
 
 ## 2. Load Sample Data
 
