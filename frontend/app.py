@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import random
+import time
 from html import unescape
 from typing import Any
 
@@ -13,6 +14,7 @@ from streamlit_searchbox import st_searchbox
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 CLUSTER_REFRESH_INTERVAL_MS = 5000
+CLUSTER_CONTROL_RESULT_TTL_SECONDS = 8
 SEMANTIC_FEATURE_ID = "feature-elasticsearch-semantic-search"
 CLUSTER_FEATURE_ID = "feature-elasticsearch-cluster-resilience"
 
@@ -601,6 +603,8 @@ def cluster_control_state(data: dict[str, Any], config: dict[str, Any]) -> dict[
 def render_cluster_control_action(data: dict[str, Any], config: dict[str, Any]) -> None:
     if "cluster_control_result" not in st.session_state:
         st.session_state.cluster_control_result = None
+    if "cluster_control_result_at" not in st.session_state:
+        st.session_state.cluster_control_result_at = 0.0
 
     control = cluster_control_state(data, config)
     if st.button(
@@ -616,6 +620,7 @@ def render_cluster_control_action(data: dict[str, Any], config: dict[str, Any]) 
         else:
             with st.spinner("Recovering offline workers..."):
                 st.session_state.cluster_control_result = run_recover_action(data, config)
+        st.session_state.cluster_control_result_at = time.time()
         st.rerun()
 
 
@@ -623,11 +628,17 @@ def render_cluster_control_result() -> None:
     result = st.session_state.get("cluster_control_result")
     if not result:
         return
+    result_age = time.time() - float(st.session_state.get("cluster_control_result_at") or 0)
+    if result.get("ok") and result_age > CLUSTER_CONTROL_RESULT_TTL_SECONDS:
+        st.session_state.cluster_control_result = None
+        st.session_state.cluster_control_result_at = 0.0
+        return
     targets_label = ", ".join(result.get("targets", [])) or result.get("target", "")
-    status_message = f"{result.get('action', 'action')} {targets_label}".strip()
     if result.get("ok"):
-        st.success(f"Completed: {status_message}")
+        action_label = "Turned off" if result.get("action") == "stop" else "Turned on"
+        st.success(f"{action_label}: {targets_label}")
     else:
+        status_message = f"{result.get('action', 'action')} {targets_label}".strip()
         st.error(result.get("message") or f"Failed: {status_message}")
     failed_results = [item for item in result.get("results", []) if not item.get("ok")]
     if failed_results:
@@ -650,17 +661,17 @@ def render_cluster_status(data: dict[str, Any], config: dict[str, Any]) -> None:
     online_workers = sum(1 for row in worker_rows if row["status"] == "online")
     worker_total = len(worker_rows)
 
-    title_col, button_col = st.columns([5, 1.6])
-    with title_col:
-        st.markdown("## Cluster Status")
-        st.caption(
-            f"Endpoint: `{data.get('elasticsearch_url', 'n/a')}` | "
-            f"Checked at: `{data.get('generated_at', 'n/a')}`"
-        )
+    st.markdown("## Cluster Status")
+    st.caption(
+        f"Endpoint: `{data.get('elasticsearch_url', 'n/a')}` | "
+        f"Checked at: `{data.get('generated_at', 'n/a')}`"
+    )
+
+    health_col, button_col = st.columns([4.5, 1.5])
+    with health_col:
+        render_cluster_health_banner(status)
     with button_col:
         render_cluster_control_action(data, config)
-
-    render_cluster_health_banner(status)
     render_cluster_control_result()
 
     m1, m2, m3, m4 = st.columns(4)
@@ -764,6 +775,13 @@ st.markdown(
     <style>
     div[data-testid="stHorizontalBlock"] div[data-testid="column"]:has(> div > div > div > button[kind="primary"]) > div {
         padding-top: 1.72rem;
+    }
+    div[data-testid="stAlert"] {
+        min-height: 2.55rem;
+    }
+    div[data-testid="stAlert"] > div {
+        padding-top: 0.58rem;
+        padding-bottom: 0.58rem;
     }
     div[data-testid="stVerticalBlock"] > div:has(iframe[title*="streamlit_autorefresh"]) {
         height: 0 !important;
