@@ -24,14 +24,14 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "title": "Scenario 2: Review Search",
         "flow_name": "Review Search",
     },
-    "scenario-3-intent-aware-search": {
-        "title": "Scenario 3: Intent-Aware Search",
-        "flow_name": "Intent-Aware Search",
-    },
-    "scenario-4-analytics-aggregation": {
-        "title": "Scenario 4: Analytics & Aggregation",
+    "scenario-3-analytics-aggregation": {
+        "title": "Scenario 3: Analytics & Aggregation",
         "flow_name": "Analytics & Aggregation",
     },
+}
+
+SCENARIO_ALIASES = {
+    "scenario-4-analytics-aggregation": "scenario-3-analytics-aggregation",
 }
 
 SearchEngine = Literal["all", "elasticsearch", "meilisearch", "postgres"]
@@ -44,7 +44,6 @@ class WorkflowService:
         self.es = Elasticsearch(settings.elasticsearch_url, request_timeout=30)
         self.meili = meilisearch.Client(settings.meili_url, settings.meili_master_key)
 
-
     def run(
         self,
         scenario_id: str,
@@ -52,6 +51,7 @@ class WorkflowService:
         limit: int = 10,
         engine: SearchEngine = "all",
     ) -> dict[str, Any]:
+        scenario_id = SCENARIO_ALIASES.get(scenario_id, scenario_id)
         if scenario_id not in SCENARIOS:
             raise KeyError(scenario_id)
         scenario = SCENARIOS[scenario_id]
@@ -69,15 +69,10 @@ class WorkflowService:
                 "meilisearch": self._meili_review_evidence_search,
                 "postgres": self._pg_review_evidence_search,
             },
-            "scenario-3-intent-aware-search": {
-                "elasticsearch": self._es_scenario_3_hybrid_search,
-                "meilisearch": self._meili_scenario_3_lexical_search,
-                "postgres": self._pg_scenario_3_lexical_search,
-            },
-            "scenario-4-analytics-aggregation": {
-                "elasticsearch": self._es_scenario_4_analytics_aggregation,
-                "meilisearch": self._meili_scenario_4_analytics_aggregation,
-                "postgres": self._pg_scenario_4_analytics_aggregation,
+            "scenario-3-analytics-aggregation": {
+                "elasticsearch": self._es_analytics_aggregation,
+                "meilisearch": self._meili_analytics_aggregation,
+                "postgres": self._pg_analytics_aggregation,
             },
         }
         scenario_runners = runner_map[scenario_id]
@@ -342,107 +337,7 @@ class WorkflowService:
             document_type="review",
         )
 
-    def _es_scenario_3_hybrid_search(self, query: str, limit: int) -> dict[str, Any]:
-        from backend.services.vertex_embedding import embed_query
-
-        query_vector = embed_query(query)
-        body = {
-            "track_total_hits": True,
-            "size": limit,
-            "query": {
-                "bool": {
-                    "should": [
-                        {
-                            "multi_match": {
-                                "query": query,
-                                "type": "best_fields",
-                                "fields": [
-                                    "title^4",
-                                    "features^2",
-                                    "brand^2",
-                                    "category^2",
-                                    "description",
-                                    "review_text",
-                                ],
-                                "operator": "or",
-                                "minimum_should_match": "2<70%",
-                            }
-                        }
-                    ]
-                }
-            },
-            "knn": {
-                "field": "title_embedding",
-                "query_vector": query_vector,
-                "k": limit,
-                "num_candidates": limit * 10,
-            },
-            "highlight": {"fields": {"title": {}, "description": {}, "review_text": {}}},
-        }
-        response = self.es.search(index=PRODUCT_INDEX, body=body)
-        result = self._engine_result(
-            "elasticsearch",
-            response,
-            "Hybrid Search: BM25 text matching combined with Vertex AI KNN vector search using Reciprocal Rank Fusion.",
-            number_of_requests=1,
-            has_aggregation=False,
-            has_custom_ranking=True,
-            backend_complexity="Low",
-            score=5,
-        )
-        return result
-
-    def _meili_scenario_3_lexical_search(self, query: str, limit: int) -> dict[str, Any]:
-        response = self.meili.index(PRODUCT_INDEX).search(
-            query,
-            {
-                "hitsPerPage": limit,
-                "page": 1,
-                "attributesToHighlight": ["title", "features", "description", "review_text"],
-                "showRankingScore": True,
-            },
-        )
-        result = self._meili_result(
-            response,
-            "No embedding model configured. Meilisearch runs lexical full-text search only.",
-            number_of_requests=1,
-            has_aggregation=False,
-            has_custom_ranking=False,
-            backend_complexity="Low",
-            score=2,
-        )
-        return result
-
-    def _pg_scenario_3_lexical_search(self, query: str, limit: int) -> dict[str, Any]:
-        sql = """
-            WITH q AS (
-                SELECT websearch_to_tsquery('english', %s) AS tsq
-            )
-            SELECT product_id, title, features, description, category, brand, price,
-                   average_rating, rating_number, review_count,
-                   ts_rank_cd(search_vector, q.tsq) AS score,
-                   count(*) OVER() AS total,
-                   ts_headline('english', title, q.tsq, 'StartSel=<mark>, StopSel=</mark>') AS title_highlight,
-                   ts_headline('english', description, q.tsq, 'StartSel=<mark>, StopSel=</mark>, MaxWords=24') AS description_highlight
-            FROM products, q
-            WHERE search_vector @@ q.tsq
-            ORDER BY score DESC, average_rating DESC, rating_number DESC
-            LIMIT %s
-        """
-        with psycopg.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
-            hits = conn.execute(sql, [query, limit]).fetchall()
-        result = self._pg_result(
-            hits,
-            "PostgreSQL has no embedding model. This remains standard full-text search.",
-            number_of_requests=1,
-            has_aggregation=False,
-            has_custom_ranking=False,
-            backend_complexity="Medium",
-            score=2,
-        )
-        return result
-
-    def _es_scenario_4_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
+    def _es_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
         rating_filter, _sentiment = self._review_rating_filter(query)
         body = {
             "track_total_hits": True,
@@ -495,7 +390,7 @@ class WorkflowService:
         )
         return result
 
-    def _meili_scenario_4_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
+    def _meili_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
         response, docs = self._meili_matching_reviews(query)
         analytics = self._build_meili_analytics(response, docs)
         return {
@@ -517,7 +412,7 @@ class WorkflowService:
             "scorecard": {"overall": 2},
         }
 
-    def _pg_scenario_4_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
+    def _pg_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
         operator, threshold, _sentiment = self._pg_review_filter(query)
         rating_clause = f"reviews.rating {operator} %s"
         with psycopg.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
@@ -960,8 +855,7 @@ class WorkflowService:
         reasons = {
             "scenario-1-product-search": "Elasticsearch ranks fuzzy multi_match across boosted product fields, so typo-heavy queries still surface the right products.",
             "scenario-2-review-search": "Elasticsearch combines review text match with rating filter, helpful_vote sort, and inline highlights in a single request.",
-            "scenario-3-intent-aware-search": "Elasticsearch uses Vertex AI embedding vectors combined with BM25 text matching (Hybrid Search) to understand user intent semantically, while Meilisearch and PostgreSQL fall back to lexical search.",
-            "scenario-4-analytics-aggregation": "Elasticsearch combines full-text review search, rating filters and aggregations in the same engine without app-side fallback.",
+            "scenario-3-analytics-aggregation": "Elasticsearch combines full-text review search, rating filters and aggregations in the same engine without app-side fallback.",
         }
         return reasons[scenario_id]
 

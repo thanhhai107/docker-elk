@@ -23,9 +23,14 @@ SERVICE_LABELS = {
 SCENARIOS = [
     ("scenario-1-product-search", "Scenario 1: Product Search"),
     ("scenario-2-review-search", "Scenario 2: Review Search"),
-    ("scenario-3-intent-aware-search", "Scenario 3: Intent-Aware Search"),
-    ("scenario-4-analytics-aggregation", "Scenario 4: Analytics & Aggregation"),
+    ("scenario-3-analytics-aggregation", "Scenario 3: Analytics & Aggregation"),
 ]
+FEATURES = [
+    ("feature-elasticsearch-semantic-search", "Feature: Elasticsearch Semantic Search"),
+]
+FEATURE_IDS = {feature_id for feature_id, _label in FEATURES}
+EXPERIENCES = SCENARIOS + FEATURES
+FEATURE_TITLES = dict(FEATURES)
 
 SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
     "scenario-1-product-search": {
@@ -68,27 +73,7 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
             "Manual SQL for filtering, ranking, and snippet generation.",
         ],
     },
-    "scenario-3-intent-aware-search": {
-        "elasticsearch": [
-            "Target: product index.",
-            "Hybrid Search: BM25 text matching + Vertex AI KNN vector search.",
-            "Query is embedded via Vertex AI text-embedding-004, then matched against product vectors.",
-            "Reciprocal Rank Fusion blends lexical and semantic scores for best results.",
-        ],
-        "meilisearch": [
-            "Target: product index.",
-            "No embedding model configured.",
-            "Runs lexical full-text search only.",
-            "Cannot understand paraphrased intent queries semantically.",
-        ],
-        "postgres": [
-            "Target: products table.",
-            "PostgreSQL has no embedding model.",
-            "Runs products.search_vector full-text search.",
-            "Falls back to standard keyword matching.",
-        ],
-    },
-    "scenario-4-analytics-aggregation": {
+    "scenario-3-analytics-aggregation": {
         "elasticsearch": [
             "Target: review index.",
             "Runs size=0 analytics queries instead of returning product hits.",
@@ -107,6 +92,14 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
             "Runs multiple SQL statements for brand, category, rating distribution, and summary metrics.",
         ],
     },
+    "feature-elasticsearch-semantic-search": {
+        "elasticsearch": [
+            "Target: product index.",
+            "Embeds the query with Vertex AI text-embedding-004.",
+            "Runs BM25 multi_match together with KNN vector search on title_embedding.",
+            "Returns one Elasticsearch-ranked result set from lexical and vector evidence.",
+        ],
+    },
 }
 
 
@@ -114,6 +107,20 @@ def get_json(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     response = requests.get(f"{BACKEND_URL}{path}", params=params, timeout=120)
     response.raise_for_status()
     return response.json()
+
+
+def request_error_detail(exc: requests.RequestException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return str(exc)
+    try:
+        payload = response.json()
+    except ValueError:
+        return str(exc)
+    detail = payload.get("detail")
+    if detail:
+        return str(detail)
+    return str(exc)
 
 
 @st.cache_data(ttl=10, show_spinner=False)
@@ -258,10 +265,13 @@ def render_result(result: dict[str, Any]) -> None:
 
     capability = result.get("semantic_capability")
     if capability:
-        with st.expander("Intent capability", expanded=False):
+        with st.expander("Vector search capability", expanded=False):
             label_map = {
                 "semantic_config": "Configuration",
                 "model_source": "Model source",
+                "vector_field": "Vector field",
+                "vector_dimensions": "Vector dimensions",
+                "combination": "Combination",
                 "conclusion": "Conclusion",
             }
             for field, label in label_map.items():
@@ -347,14 +357,29 @@ def render_output(data: dict[str, Any]) -> None:
             render_result(result)
 
 
-def run_search(scenario_id: str, selected_query: str | None, limit: int, engine: str) -> None:
+def run_search(experience_id: str, selected_query: str | None, limit: int, engine: str) -> None:
     try:
-        params: dict[str, Any] = {"limit": limit, "engine": engine}
+        params: dict[str, Any] = {"limit": limit}
         if selected_query:
             params["q"] = selected_query
-        data = get_json(f"/scenarios/{scenario_id}", params)
+        if experience_id in FEATURE_IDS:
+            result = get_json("/features/elasticsearch/semantic-search", params)
+            data = {
+                "scenario_id": experience_id,
+                "title": FEATURE_TITLES[experience_id],
+                "flow_name": "Elasticsearch Semantic Search",
+                "query": selected_query or "",
+                "queries": {"query": selected_query or ""},
+                "engine": "elasticsearch",
+                "winner": None,
+                "winner_reason": None,
+                "results": [result],
+            }
+        else:
+            params["engine"] = engine
+            data = get_json(f"/scenarios/{experience_id}", params)
     except requests.RequestException as exc:
-        st.error(f"Backend is not ready: {exc}")
+        st.error(f"Backend is not ready: {request_error_detail(exc)}")
         return
 
     render_output(data)
@@ -379,7 +404,7 @@ st.markdown(
 )
 st.title("Amazon Electronics Search Demo")
 
-scenario_labels = {label: scenario_id for scenario_id, label in SCENARIOS}
+experience_labels = {label: experience_id for experience_id, label in EXPERIENCES}
 service_labels = {label: engine for engine, label in SERVICE_LABELS.items()}
 
 if "search_request" not in st.session_state:
@@ -394,9 +419,22 @@ def suggestion_search(prefix: str) -> list[tuple[str, str]]:
 st.markdown("## Input")
 scenario_col, service_col, limit_col, button_col = st.columns([3.6, 3.0, 1.6, 1.2])
 with scenario_col:
-    selected_label = st.selectbox("Scenario", list(scenario_labels), key="scenario_label")
+    selected_label = st.selectbox("Scenario / Feature", list(experience_labels), key="experience_label")
+selected_experience_id = experience_labels[selected_label]
+available_service_labels = (
+    {"Elasticsearch": "elasticsearch"}
+    if selected_experience_id in FEATURE_IDS
+    else service_labels
+)
+if st.session_state.get("service_label") not in available_service_labels:
+    st.session_state.service_label = next(iter(available_service_labels))
 with service_col:
-    selected_service_label = st.selectbox("Service", list(service_labels), key="service_label")
+    st.selectbox(
+        "Service",
+        list(available_service_labels),
+        key="service_label",
+        disabled=selected_experience_id in FEATURE_IDS,
+    )
 with limit_col:
     limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1, key="limit_value")
 with button_col:
@@ -432,14 +470,23 @@ if submitted or auto_run:
     else:
         st.session_state.selected_query = typed_query
         st.session_state.search_request = {
-            "scenario_id": scenario_labels[st.session_state.scenario_label],
+            "experience_id": experience_labels[st.session_state.experience_label],
             "query": typed_query,
             "limit": int(st.session_state.limit_value),
-            "engine": service_labels[st.session_state.service_label],
+            "engine": available_service_labels[st.session_state.service_label],
         }
 
 if st.session_state.search_request:
     request = st.session_state.search_request
-    run_search(request["scenario_id"], request["query"], request["limit"], request.get("engine", "all"))
+    request_experience_id = request.get("experience_id") or request.get("scenario_id")
+    if not request_experience_id:
+        st.error("Search request is missing a scenario or feature.")
+    else:
+        run_search(
+            request_experience_id,
+            request["query"],
+            request["limit"],
+            request.get("engine", "all"),
+        )
 else:
     st.info("Enter a query, choose a scenario, then press Search.")

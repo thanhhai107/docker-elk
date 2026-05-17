@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 from elasticsearch import Elasticsearch
@@ -96,8 +97,14 @@ class ElasticsearchSearchService:
         }
 
     def semantic_search(self, q: str, limit: int = 10) -> dict[str, Any]:
+        from backend.services.vertex_embedding import EMBEDDING_DIMS, EMBEDDING_MODEL, embed_query
+
+        started = perf_counter()
+        query_vector = embed_query(q)
         body = {
+            "track_total_hits": True,
             "size": limit,
+            "_source": {"excludes": ["title_embedding"]},
             "query": {
                 "multi_match": {
                     "query": q,
@@ -112,18 +119,52 @@ class ElasticsearchSearchService:
                     ],
                     "operator": "or",
                     "minimum_should_match": "2<70%",
+                    "boost": 0.7,
                 }
+            },
+            "knn": {
+                "field": "title_embedding",
+                "query_vector": query_vector,
+                "k": limit,
+                "num_candidates": max(limit * 10, 50),
+                "boost": 0.3,
             },
             "highlight": {"fields": {"title": {}, "description": {}, "review_text": {}}},
         }
         response = self.client.search(index=self.index, body=body)
         return {
             "engine": self.engine,
-            "mode": "synonym_multi_match",
+            "document_type": "product",
+            "mode": "hybrid_vector_search",
             "query": q,
             "hits": [self._hit(item) for item in response["hits"]["hits"]],
+            "aggregations": {},
             "total": response["hits"]["total"]["value"],
-            "note": "Synonym-aware multi_match using the product_search analyzer (synonym_graph filter expands intent terms).",
+            "took_ms": round((perf_counter() - started) * 1000, 2),
+            "number_of_requests": 1,
+            "has_highlight": True,
+            "has_aggregation": False,
+            "has_custom_ranking": True,
+            "backend_complexity": "Low",
+            "scorecard": {"overall": 5},
+            "note": (
+                "Elasticsearch hybrid search combines BM25 multi_match with KNN vector search "
+                "against the title_embedding dense_vector field in one request."
+            ),
+            "semantic_capability": {
+                "semantic_config": (
+                    "Hybrid request = boosted lexical multi_match + top-level knn over "
+                    "title_embedding dense_vector."
+                ),
+                "model_source": (
+                    f"Vertex AI {EMBEDDING_MODEL} creates the query vector; ingest stores "
+                    "product title/features/description embeddings in Elasticsearch."
+                ),
+                "vector_field": "title_embedding",
+                "vector_dimensions": EMBEDDING_DIMS,
+                "combination": "Elasticsearch combines lexical and vector matches into one ranked result set.",
+                "conclusion": "This feature is Elasticsearch-only because it depends on dense_vector + KNN search.",
+            },
         }
 
     def review_analytics(self) -> dict[str, Any]:

@@ -8,15 +8,17 @@ search use case:
 - PostgreSQL Full-Text Search
 - Kibana for Elasticsearch inspection
 
-The demo is organized into three official flows: advanced keyword search,
-intent-aware search via synonyms, and search-driven review analytics.
+The demo is organized into three comparative flows: advanced keyword search,
+review evidence search, and search-driven review analytics. Semantic Search is
+an Elasticsearch-only feature because it combines lexical search with vector
+search inside Elasticsearch.
 
 ## Demo Features
 
 - Full-text search across product metadata and review text
 - Product discovery with Elasticsearch `multi_match`, field boosting, and fuzziness
 - Elasticsearch search-as-you-type autocomplete over product titles
-- Elasticsearch synonym-aware intent search via `synonym_graph` and boosted `multi_match`
+- Elasticsearch-only Semantic Search with Vertex AI embeddings, `dense_vector`, and KNN vector search
 - Review evidence search with rating filters, helpful-vote tie-breaks, and highlights
 - Filters by brand, category, price, and rating
 - Faceted search and aggregations
@@ -166,9 +168,11 @@ docker compose exec -T backend python scripts/ingest_all.py --reset \
   --postgres-chunk-size 5000
 ```
 
-All three engines ingest only lexical/full-text fields. Scenario 3 uses
-Elasticsearch synonyms plus boosted `multi_match`; Meilisearch and PostgreSQL
-fall back to standard full-text search.
+All three engines ingest lexical/full-text fields for the comparative
+scenarios. Elasticsearch also ingests `title_embedding` vectors for the
+Elasticsearch-only Semantic Search feature. That feature requires Vertex AI
+credentials during ingest unless you pass `--skip-embeddings`; if embeddings are
+skipped, the Semantic Search feature will not have vectors to query.
 
 By default, `prepare_data.py` balances review selection across products:
 
@@ -268,21 +272,30 @@ GET _cat/thread_pool/search?v
 
 ## Demo Scenarios
 
-The frontend has one search bar, a scenario selector, a service selector, and a
-result area split by engine.
+The frontend has one search bar, a scenario/feature selector, a service
+selector, and a result area split by engine. Comparative scenarios can run
+against all three services. The Semantic Search feature is Elasticsearch-only
+and forces the service to Elasticsearch.
 
 | Scenario | Flow | User query | Demo goal | Main difference |
 | --- | --- | --- | --- | --- |
 | Scenario 1 | Product Search | `wireles noise canclling headphnes sony` | Find products by typo-heavy keywords across product metadata | Elasticsearch boosts fuzzy `multi_match` per field; Meilisearch leans on built-in typo tolerance; PostgreSQL FTS misses many typos without `pg_trgm` |
 | Scenario 2 | Review Search | `battery dies after a week` | Surface review evidence that matches the user query | Elasticsearch combines text match, rating filter, helpful-vote sort, and highlighted snippets in one request |
-| Scenario 3 | Intent-Aware Search | `headphones for flights and office calls` | Match paraphrased intent queries without external embeddings | Elasticsearch uses a `synonym_graph` filter with boosted `multi_match`; Meilisearch and PostgreSQL fall back to full-text search |
-| Scenario 4 | Analytics & Aggregation | `battery problem` | Find which brands/categories receive the most matching complaints and the rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
+| Scenario 3 | Analytics & Aggregation | `battery problem` | Find which brands/categories receive the most matching complaints and the rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
 
-Each scenario shows 3 columns:
+Elasticsearch-only feature:
+
+| Feature | Flow | User query | Demo goal | Main difference |
+| --- | --- | --- | --- | --- |
+| Semantic Search | Elasticsearch Semantic Search | `headphones for flights with quiet cabin noise` | Prove Elasticsearch can combine BM25 text matching with Vector Search | One Elasticsearch request runs boosted `multi_match` plus KNN search over the `title_embedding` `dense_vector` field |
+
+Each comparative scenario shows 3 columns:
 
 ```text
 Elasticsearch | Meilisearch | PostgreSQL FTS
 ```
+
+The Semantic Search feature shows only the Elasticsearch result column.
 
 Each column includes timing, request/query count, total hits, highlights,
 aggregations/facets when available, and a short note about that engine.
@@ -321,19 +334,19 @@ Item metadata source fields used by this demo:
 
 The product index also stores a small aggregated `review_text` field from
 matching reviews so Scenario 1 (product search) can search product metadata plus review language.
-Scenario 3 (intent-aware search) uses curated synonyms instead of an embedding
-model. The product index ships with a `synonym_graph` filter on the
-`product_search` analyzer (see `scripts/create_elasticsearch_indices.py`),
-covering common Amazon Electronics intent phrases (ANC, wireless, headphones,
-cheap/budget, etc.). Add or edit synonyms in that file and reset the indices
-to apply.
+The Elasticsearch Semantic Search feature also stores `title_embedding`, a
+768-dimensional `dense_vector` generated from product title, feature, and
+description text. At query time the backend embeds the user query with Vertex AI
+and sends Elasticsearch one hybrid request containing boosted `multi_match` and
+KNN vector search.
 
 ## Main Endpoints
 
-List scenarios and sample queries:
+List scenarios/features and sample queries:
 
 ```bash
 curl "http://localhost:8000/scenarios"
+curl "http://localhost:8000/features"
 ```
 
 Run a single scenario:
@@ -341,8 +354,7 @@ Run a single scenario:
 ```bash
 curl "http://localhost:8000/scenarios/scenario-1-product-search?q=wireles%20noise%20canclling%20headphnes%20sony"
 curl "http://localhost:8000/scenarios/scenario-2-review-search?q=battery%20dies%20after%20a%20week"
-curl "http://localhost:8000/scenarios/scenario-3-intent-aware-search?q=headphones%20for%20flights%20and%20office%20calls"
-curl "http://localhost:8000/scenarios/scenario-4-analytics-aggregation?q=battery%20problem"
+curl "http://localhost:8000/scenarios/scenario-3-analytics-aggregation?q=battery%20problem"
 ```
 
 Basic search endpoints:
@@ -357,9 +369,10 @@ Elasticsearch-specific capabilities:
 
 ```bash
 curl "http://localhost:8000/search/elasticsearch/as-you-type?q=sony%20wh"
-curl "http://localhost:8000/search/elasticsearch/semantic?q=headphones%20for%20flights%20with%20quiet%20cabin%20noise"
+curl "http://localhost:8000/features/elasticsearch/semantic-search?q=headphones%20for%20flights%20with%20quiet%20cabin%20noise"
 ```
 
 `as-you-type` uses an Elasticsearch `search_as_you_type` field on product
-titles. Intent-aware search uses synonym-aware `multi_match`; re-run ingest
-with `--reset` after editing synonyms or mappings.
+titles. Semantic Search uses the `title_embedding` `dense_vector` field and KNN
+vector search together with lexical `multi_match`; re-run Elasticsearch ingest
+with `--reset` after editing the vector mapping or regenerated embeddings.

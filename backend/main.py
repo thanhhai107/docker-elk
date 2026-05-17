@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from backend.services.elasticsearch_service import ElasticsearchSearchService
 from backend.services.meilisearch_service import MeiliSearchService
 from backend.services.postgres_service import PostgresSearchService
-from backend.services.workflow_service import WorkflowService
+from backend.services.workflow_service import SCENARIOS, WorkflowService
 
 
 app = FastAPI(title="Amazon Electronics Search Demo")
@@ -64,7 +64,22 @@ def elasticsearch_semantic(
     q: str = Query("headphones for flights with quiet cabin noise"),
     limit: int = Query(10, ge=1, le=50),
 ) -> dict[str, Any]:
-    return ElasticsearchSearchService().semantic_search(q, limit)
+    return run_elasticsearch_semantic_search(q, limit)
+
+
+@app.get("/features/elasticsearch/semantic-search")
+def elasticsearch_semantic_feature(
+    q: str = Query("headphones for flights with quiet cabin noise"),
+    limit: int = Query(10, ge=1, le=50),
+) -> dict[str, Any]:
+    return run_elasticsearch_semantic_search(q, limit)
+
+
+def run_elasticsearch_semantic_search(q: str, limit: int) -> dict[str, Any]:
+    try:
+        return ElasticsearchSearchService().semantic_search(q, limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/analytics/reviews")
@@ -79,6 +94,24 @@ def review_analytics() -> dict[str, Any]:
     return output
 
 
+@app.get("/scenarios")
+def list_scenarios() -> dict[str, Any]:
+    scenarios = [{"id": scenario_id, **metadata} for scenario_id, metadata in SCENARIOS.items()]
+    return {"scenarios": scenarios}
+
+
+@app.get("/features")
+def list_features() -> dict[str, Any]:
+    return {
+        "features": [
+            {
+                "id": "feature-elasticsearch-semantic-search",
+                "title": "Feature: Elasticsearch Semantic Search",
+                "engine": "elasticsearch",
+                "path": "/features/elasticsearch/semantic-search",
+            }
+        ]
+    }
 
 
 @app.get("/scenarios/{scenario_id}")
