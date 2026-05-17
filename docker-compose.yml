@@ -56,6 +56,7 @@ services:
     environment:
       SERVER_NAME: kibana
       SERVER_HOST: 0.0.0.0
+      SERVER_PUBLICBASEURL: "http://localhost:5601"
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
       XPACK_SECURITY_ENABLED: "false"
       XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: "a]3F9g#Kz!mP7vQ2wR8xY0bN5dL1hJ6c"
