@@ -363,16 +363,7 @@ def suggestion_search(prefix: str) -> list[tuple[str, str]]:
     return [(title, title) for title in fetch_suggestions(prefix, limit=8)]
 
 st.markdown("## 1. Input & Search Options")
-search_col, scenario_col, service_col, limit_col, button_col = st.columns([4.4, 2.4, 1.9, 1.1, 1])
-with search_col:
-    selected_suggestion = st_searchbox(
-        suggestion_search,
-        placeholder="Type product, review problem, or analytics keyword",
-        label="Search query",
-        key="query_box",
-        clear_on_submit=False,
-        edit_after_submit="current",
-    )
+scenario_col, service_col, limit_col, button_col = st.columns([3.6, 3.0, 1.6, 1.2])
 with scenario_col:
     selected_label = st.selectbox("Scenario", list(scenario_labels), key="scenario_label")
 with service_col:
@@ -380,7 +371,16 @@ with service_col:
 with limit_col:
     limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1, key="limit_value")
 with button_col:
-    submitted = st.button("Search", use_container_width=True, key="search_button")
+    submitted = st.button("🔍 Search", use_container_width=True, key="search_button")
+
+selected_suggestion = st_searchbox(
+    suggestion_search,
+    placeholder="Type product, review problem, or analytics keyword",
+    label="Search query",
+    key="query_box",
+    clear_on_submit=False,
+    edit_after_submit="current",
+)
 
 auto_run = False
 if isinstance(selected_suggestion, str) and selected_suggestion and selected_suggestion != st.session_state.selected_query:
