@@ -660,17 +660,7 @@ def render_cluster_status(data: dict[str, Any], config: dict[str, Any]) -> None:
     with button_col:
         render_cluster_control_action(data, config)
 
-    health_col, mode_col = st.columns([2, 1])
-    with health_col:
-        render_cluster_health_banner(status)
-    with mode_col:
-        control = cluster_control_state(data, config)
-        if control["fully_available"]:
-            st.success(f"Mode: {control['mode']}")
-        elif control["configured"]:
-            st.warning(f"Mode: {control['mode']}")
-        else:
-            st.info(f"Mode: {control['mode']}")
+    render_cluster_health_banner(status)
     render_cluster_control_result()
 
     m1, m2, m3, m4 = st.columns(4)
