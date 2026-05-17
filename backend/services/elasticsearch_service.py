@@ -101,7 +101,18 @@ class ElasticsearchSearchService:
 
         started = perf_counter()
         query_vector = embed_query(q)
-        body = {
+        semantic_body = {
+            "track_total_hits": True,
+            "size": limit,
+            "_source": {"excludes": ["title_embedding"]},
+            "knn": {
+                "field": "title_embedding",
+                "query_vector": query_vector,
+                "k": limit,
+                "num_candidates": max(limit * 10, 50),
+            },
+        }
+        keyword_body = {
             "track_total_hits": True,
             "size": limit,
             "_source": {"excludes": ["title_embedding"]},
@@ -119,42 +130,66 @@ class ElasticsearchSearchService:
                     ],
                     "operator": "or",
                     "minimum_should_match": "2<70%",
-                    "boost": 0.7,
                 }
-            },
-            "knn": {
-                "field": "title_embedding",
-                "query_vector": query_vector,
-                "k": limit,
-                "num_candidates": max(limit * 10, 50),
-                "boost": 0.3,
             },
             "highlight": {"fields": {"title": {}, "description": {}, "review_text": {}}},
         }
-        response = self.client.search(index=self.index, body=body)
+        semantic_started = perf_counter()
+        semantic_response = self.client.search(index=self.index, body=semantic_body)
+        semantic_took_ms = round((perf_counter() - semantic_started) * 1000, 2)
+
+        keyword_started = perf_counter()
+        keyword_response = self.client.search(index=self.index, body=keyword_body)
+        keyword_took_ms = round((perf_counter() - keyword_started) * 1000, 2)
+
+        semantic_hits = [self._hit(item) for item in semantic_response["hits"]["hits"]]
+        keyword_hits = [self._hit(item) for item in keyword_response["hits"]["hits"]]
         return {
             "engine": self.engine,
-            "document_type": "product",
-            "mode": "hybrid_vector_search",
+            "document_type": "comparison",
+            "mode": "semantic_vs_keyword",
             "query": q,
-            "hits": [self._hit(item) for item in response["hits"]["hits"]],
+            "hits": [],
+            "sections": [
+                {
+                    "title": "Semantic Search",
+                    "query": q,
+                    "document_type": "product",
+                    "total": semantic_response["hits"]["total"]["value"],
+                    "hits": semantic_hits,
+                    "has_highlight": False,
+                    "took_ms": semantic_took_ms,
+                    "note": "Vector-only KNN search on title_embedding. Highlight is disabled to show this side is not keyword evidence.",
+                },
+                {
+                    "title": "Keyword Search",
+                    "query": q,
+                    "document_type": "product",
+                    "total": keyword_response["hits"]["total"]["value"],
+                    "hits": keyword_hits,
+                    "has_highlight": True,
+                    "took_ms": keyword_took_ms,
+                    "note": "BM25-style multi_match over product text fields with highlights enabled.",
+                },
+            ],
+            "section_layout": "columns",
             "aggregations": {},
-            "total": response["hits"]["total"]["value"],
+            "total": semantic_response["hits"]["total"]["value"],
             "took_ms": round((perf_counter() - started) * 1000, 2),
-            "number_of_requests": 1,
+            "number_of_requests": 2,
             "has_highlight": True,
             "has_aggregation": False,
             "has_custom_ranking": True,
             "backend_complexity": "Low",
             "scorecard": {"overall": 5},
             "note": (
-                "Elasticsearch hybrid search combines BM25 multi_match with KNN vector search "
-                "against the title_embedding dense_vector field in one request."
+                "This feature compares Elasticsearch vector semantic retrieval against keyword "
+                "multi_match retrieval for the same query."
             ),
             "semantic_capability": {
                 "semantic_config": (
-                    "Hybrid request = boosted lexical multi_match + top-level knn over "
-                    "title_embedding dense_vector."
+                    "Left: vector-only KNN over title_embedding dense_vector with no highlight. "
+                    "Right: keyword multi_match with highlight."
                 ),
                 "model_source": (
                     f"Vertex AI {EMBEDDING_MODEL} creates the query vector; ingest stores "
@@ -162,8 +197,8 @@ class ElasticsearchSearchService:
                 ),
                 "vector_field": "title_embedding",
                 "vector_dimensions": EMBEDDING_DIMS,
-                "combination": "Elasticsearch combines lexical and vector matches into one ranked result set.",
-                "conclusion": "This feature is Elasticsearch-only because it depends on dense_vector + KNN search.",
+                "combination": "The UI shows vector retrieval and keyword retrieval side by side for comparison.",
+                "conclusion": "Semantic Search is Elasticsearch-only here because it depends on dense_vector + KNN search.",
             },
         }
 

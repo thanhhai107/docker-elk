@@ -325,7 +325,7 @@ Elasticsearch-only feature:
 
 | Feature | Flow | User query | Demo goal | Main difference |
 | --- | --- | --- | --- | --- |
-| Semantic Search | Elasticsearch Semantic Search | `headphones for flights with quiet cabin noise` | Prove Elasticsearch can combine BM25 text matching with Vector Search | One Elasticsearch request runs boosted `multi_match` plus KNN search over the `title_embedding` `dense_vector` field |
+| Semantic Search | Elasticsearch Semantic Search | `headphones for flights with quiet cabin noise` | Compare vector semantic retrieval with keyword retrieval in Elasticsearch | Left side runs KNN over the `title_embedding` `dense_vector` field with highlight disabled; right side runs keyword `multi_match` with highlight enabled |
 
 Each comparative scenario shows 3 columns:
 
@@ -375,8 +375,9 @@ matching reviews so Scenario 1 (product search) can search product metadata plus
 The Elasticsearch Semantic Search feature also stores `title_embedding`, a
 768-dimensional `dense_vector` generated from product title, feature, and
 description text. At query time the backend embeds the user query with Vertex AI
-and sends Elasticsearch one hybrid request containing boosted `multi_match` and
-KNN vector search.
+and compares two Elasticsearch retrieval modes: vector-only KNN search over
+`title_embedding` with highlights disabled, and keyword `multi_match` with
+highlights enabled.
 
 ## Main Endpoints
 
@@ -411,6 +412,6 @@ curl "http://localhost:8000/features/elasticsearch/semantic-search?q=headphones%
 ```
 
 `as-you-type` uses an Elasticsearch `search_as_you_type` field on product
-titles. Semantic Search uses the `title_embedding` `dense_vector` field and KNN
-vector search together with lexical `multi_match`; re-run Elasticsearch ingest
+titles. Semantic Search compares KNN vector search over the `title_embedding`
+`dense_vector` field against lexical `multi_match`; re-run Elasticsearch ingest
 with `--reset` after editing the vector mapping or regenerated embeddings.

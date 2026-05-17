@@ -104,8 +104,8 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
         "elasticsearch": [
             "Target: product index.",
             "Embeds the query with Vertex AI text-embedding-004.",
-            "Runs BM25 multi_match together with KNN vector search on title_embedding.",
-            "Returns one Elasticsearch-ranked result set from lexical and vector evidence.",
+            "Left side runs vector-only KNN search on title_embedding with highlight disabled.",
+            "Right side runs keyword multi_match search with highlight enabled.",
         ],
     },
 }
@@ -278,6 +278,27 @@ def render_hit(hit: dict[str, Any], document_type: str) -> None:
             render_product_hit(hit)
 
 
+def render_result_section(section: dict[str, Any]) -> None:
+    st.markdown(f"#### {section.get('title', 'Result section')}")
+    details = [
+        f"Query: `{section.get('query', '')}`",
+        f"Hits: {section.get('total', 0)}",
+    ]
+    if section.get("took_ms") is not None:
+        details.append(f"Time: {section.get('took_ms')} ms")
+    details.append(f"Highlight: {'yes' if section.get('has_highlight') else 'no'}")
+    st.caption(" | ".join(details))
+    if section.get("note"):
+        st.write(section["note"])
+
+    hits = section.get("hits", [])
+    if not hits:
+        st.info("No result documents returned for this section.")
+        return
+    for hit in hits[:5]:
+        render_hit(hit, section.get("document_type", "product"))
+
+
 def render_result(result: dict[str, Any]) -> None:
     label = ENGINE_LABELS.get(result["engine"], result["engine"])
     st.markdown(f"### {label}")
@@ -321,21 +342,14 @@ def render_result(result: dict[str, Any]) -> None:
 
     sections = result.get("sections") or []
     if sections:
-        for section in sections:
-            st.markdown(f"#### {section.get('title', 'Result section')}")
-            st.caption(
-                " | ".join(
-                    [
-                        f"Query: `{section.get('query', '')}`",
-                        f"Hits: {section.get('total', 0)}",
-                    ]
-                )
-            )
-            hits = section.get("hits", [])
-            if not hits:
-                continue
-            for hit in hits[:5]:
-                render_hit(hit, section.get("document_type", "product"))
+        if result.get("section_layout") == "columns":
+            cols = st.columns(len(sections))
+            for col, section in zip(cols, sections):
+                with col:
+                    render_result_section(section)
+        else:
+            for section in sections:
+                render_result_section(section)
         return
 
     hits = result.get("hits", [])
