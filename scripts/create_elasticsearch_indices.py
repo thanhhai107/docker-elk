@@ -53,6 +53,7 @@ PRODUCT_MAPPING = {
             "avg_review_rating": {"type": "double"},
             "loaded_review_count": {"type": "integer"},
             "helpful_votes": {"type": "integer"},
+            "title_embedding": {"type": "dense_vector", "dims": 768, "index": True, "similarity": "cosine"},
         }
     },
 }
@@ -62,8 +63,22 @@ REVIEW_MAPPING = {
         "number_of_shards": 3,
         "number_of_replicas": 2,
         "analysis": {
+            "filter": {
+                "english_stop": {"type": "stop", "stopwords": "_english_"},
+                "english_stemmer": {"type": "stemmer", "language": "english"},
+                "english_possessive_stemmer": {"type": "stemmer", "language": "possessive_english"}
+            },
             "analyzer": {
-                "review_text": {"tokenizer": "standard", "filter": ["lowercase", "asciifolding"]}
+                "review_text": {
+                    "tokenizer": "standard",
+                    "filter": [
+                        "english_possessive_stemmer",
+                        "lowercase",
+                        "asciifolding",
+                        "english_stop",
+                        "english_stemmer"
+                    ]
+                }
             }
         }
     },

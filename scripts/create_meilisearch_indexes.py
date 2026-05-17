@@ -12,12 +12,14 @@ def create_indexes() -> None:
     wait(client, products.update_sortable_attributes(["price", "rating", "review_count", "average_rating", "rating_number"]))
     wait(client, products.update_searchable_attributes(["title", "brand", "category", "features", "description", "review_text"]))
     wait(client, products.update_displayed_attributes(["*"]))
+    wait(client, products.update_pagination_settings({"maxTotalHits": 100000}))
 
     reviews = client.index("amazon_electronics_reviews")
     wait(client, reviews.update_filterable_attributes(["product_id", "brand", "category", "rating", "verified_purchase"]))
     wait(client, reviews.update_sortable_attributes(["rating", "helpful_vote"]))
     wait(client, reviews.update_searchable_attributes(["title", "text"]))
     wait(client, reviews.update_displayed_attributes(["*"]))
+    wait(client, reviews.update_pagination_settings({"maxTotalHits": 100000}))
 
 
 def task_uid(task) -> int:

@@ -71,21 +71,21 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
     "scenario-3-intent-aware-search": {
         "elasticsearch": [
             "Target: product index.",
-            "Expands the query with the synonym_graph filter (anc/headphones/wireless/cheap).",
-            "Runs boosted multi_match across title, features, brand, category, description, review_text.",
-            "Captures user intent without external embedding providers.",
+            "Hybrid Search: BM25 text matching + Gemini KNN vector search.",
+            "Query is embedded via Gemini text-embedding-004, then matched against product vectors.",
+            "Reciprocal Rank Fusion blends lexical and semantic scores for best results.",
         ],
         "meilisearch": [
             "Target: product index.",
-            "No curated synonyms or embeddings are configured here.",
-            "Runs normal full-text search only.",
-            "Shows the remaining baseline when intent expansion is not configured.",
+            "No embedding model configured.",
+            "Runs lexical full-text search only.",
+            "Cannot understand paraphrased intent queries semantically.",
         ],
         "postgres": [
             "Target: products table.",
-            "PostgreSQL core has no built-in synonym/embedding generator.",
+            "PostgreSQL has no embedding model.",
             "Runs products.search_vector full-text search.",
-            "No vector extension or synonym dictionary is used here.",
+            "Falls back to standard keyword matching.",
         ],
     },
     "scenario-4-analytics-aggregation": {
@@ -428,6 +428,7 @@ if submitted or auto_run:
         typed_query = (st.session_state.selected_query or "").strip()
     if not typed_query:
         st.warning("Please enter a query before searching.")
+        st.session_state.search_request = None
     else:
         st.session_state.selected_query = typed_query
         st.session_state.search_request = {

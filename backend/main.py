@@ -79,9 +79,6 @@ def review_analytics() -> dict[str, Any]:
     return output
 
 
-@app.get("/scenarios")
-def scenarios() -> dict[str, Any]:
-    return WorkflowService().list_scenarios()
 
 
 @app.get("/scenarios/{scenario_id}")

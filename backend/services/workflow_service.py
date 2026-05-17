@@ -15,95 +15,22 @@ from backend.config import settings
 PRODUCT_INDEX = "amazon_electronics_products"
 REVIEW_INDEX = "amazon_electronics_reviews"
 
-ADVANCED_KEYWORD_PRODUCT_QUERIES = [
-    "wireles noise canclling headphnes sony",
-    "wireless noise cancelling headphone",
-    "iphne charger fast charging",
-    "bluetooth speaker bass",
-]
-
-REVIEW_EVIDENCE_QUERIES = [
-    "battery dies after a week",
-    "battery problem",
-    "stopped working after a week",
-]
-
-NATIVE_SEMANTIC_QUERIES = [
-    "headphones for flights and office calls",
-    "quiet headphones for working from home",
-    "portable speaker for outdoor party with strong bass",
-    "charger that fills phone battery quickly",
-]
-
-REVIEW_ANALYTICS_QUERIES = [
-    "battery problem",
-    "battery drain problem",
-    "charging problem",
-]
-
-QUERY_OPTIONS = (
-    ADVANCED_KEYWORD_PRODUCT_QUERIES
-    + REVIEW_EVIDENCE_QUERIES
-    + NATIVE_SEMANTIC_QUERIES
-    + REVIEW_ANALYTICS_QUERIES
-)
-
 SCENARIOS: dict[str, dict[str, Any]] = {
     "scenario-1-product-search": {
         "title": "Scenario 1: Product Search",
         "flow_name": "Product Search",
-        "user_action": "Type a product need (with typos OK) to discover matching products.",
-        "demo_goal": "Find the right product across title, brand, category, features, description, and aggregated review text, even with typos.",
-        "difference": (
-            "Elasticsearch ranks fuzzy multi_match across boosted product fields. "
-            "Meilisearch leans on built-in typo tolerance; PostgreSQL FTS struggles on typos without pg_trgm."
-        ),
-        "summary": (
-            "Product discovery workflow targeting the products index/table. "
-            "Elasticsearch shows boosted fields + fuzziness; the others use their default keyword search."
-        ),
     },
     "scenario-2-review-search": {
         "title": "Scenario 2: Review Search",
         "flow_name": "Review Search",
-        "user_action": "Search reviews for a complaint or question (e.g. battery problem, charger broken).",
-        "demo_goal": "Surface review snippets that match the user query, ranked by helpful-vote tie-break with highlighted evidence.",
-        "difference": (
-            "Elasticsearch filters reviews by rating, sorts by helpful_vote, and highlights matching fragments. "
-            "Meilisearch/PostgreSQL provide similar pieces with less ranking control."
-        ),
-        "summary": (
-            "Review evidence workflow targeting the reviews index/table. "
-            "Elasticsearch combines text match, rating filter, helpful-vote sort, and snippet highlights."
-        ),
     },
     "scenario-3-intent-aware-search": {
         "title": "Scenario 3: Intent-Aware Search",
         "flow_name": "Intent-Aware Search",
-        "user_action": "Search by paraphrased intent (e.g. headphones for flights and office calls).",
-        "demo_goal": "Match intent-style queries without external embedding providers using curated synonyms.",
-        "difference": (
-            "Elasticsearch uses synonym-aware multi_match (synonym_graph expands ANC/wireless/headphones/etc.). "
-            "Meilisearch and PostgreSQL fall back to lexical full-text search."
-        ),
-        "summary": (
-            "No-external-model intent workflow. Elasticsearch uses synonyms plus boosted multi_match over product metadata and review text; "
-            "Meilisearch and PostgreSQL demonstrate what remains without curated synonyms: standard full-text retrieval."
-        ),
     },
     "scenario-4-analytics-aggregation": {
         "title": "Scenario 4: Analytics & Aggregation",
         "flow_name": "Analytics & Aggregation",
-        "user_action": "Type a review topic (e.g. battery problem) to summarize complaints by brand/category/rating.",
-        "demo_goal": "Answer which brands/categories receive the most matching complaints and how ratings are distributed.",
-        "difference": (
-            "Elasticsearch combines search plus aggregation/facets in one engine; "
-            "Meilisearch/PostgreSQL need app-side or SQL work."
-        ),
-        "summary": (
-            "Review analytics workflow for turning a topic into brand/category/rating insights. "
-            "Elasticsearch combines full-text search, filters, aggregation, and facets inside one engine."
-        ),
     },
 }
 
@@ -117,15 +44,6 @@ class WorkflowService:
         self.es = Elasticsearch(settings.elasticsearch_url, request_timeout=30)
         self.meili = meilisearch.Client(settings.meili_url, settings.meili_master_key)
 
-    def list_scenarios(self) -> dict[str, Any]:
-        return {
-            "scenarios": SCENARIOS,
-            "query_options": QUERY_OPTIONS,
-            "keyword_product_queries": ADVANCED_KEYWORD_PRODUCT_QUERIES,
-            "review_evidence_queries": REVIEW_EVIDENCE_QUERIES,
-            "semantic_queries": NATIVE_SEMANTIC_QUERIES,
-            "analytics_queries": REVIEW_ANALYTICS_QUERIES,
-        }
 
     def run(
         self,
@@ -152,14 +70,14 @@ class WorkflowService:
                 "postgres": self._pg_review_evidence_search,
             },
             "scenario-3-intent-aware-search": {
-                "elasticsearch": self._es_scenario_2_semantic_search,
-                "meilisearch": self._meili_scenario_2_semantic_search,
-                "postgres": self._pg_scenario_2_semantic_search,
+                "elasticsearch": self._es_scenario_3_hybrid_search,
+                "meilisearch": self._meili_scenario_3_lexical_search,
+                "postgres": self._pg_scenario_3_lexical_search,
             },
             "scenario-4-analytics-aggregation": {
-                "elasticsearch": self._es_scenario_3_analytics_aggregation,
-                "meilisearch": self._meili_scenario_3_analytics_aggregation,
-                "postgres": self._pg_scenario_3_analytics_aggregation,
+                "elasticsearch": self._es_scenario_4_analytics_aggregation,
+                "meilisearch": self._meili_scenario_4_analytics_aggregation,
+                "postgres": self._pg_scenario_4_analytics_aggregation,
             },
         }
         scenario_runners = runner_map[scenario_id]
@@ -185,10 +103,6 @@ class WorkflowService:
             "scenario_id": scenario_id,
             "title": scenario["title"],
             "flow_name": scenario["flow_name"],
-            "user_action": scenario["user_action"],
-            "demo_goal": scenario["demo_goal"],
-            "difference": scenario["difference"],
-            "summary": scenario["summary"],
             "query": selected_query,
             "queries": self._scenario_queries(scenario_id, selected_query),
             "engine": selected_engine,
@@ -428,25 +342,40 @@ class WorkflowService:
             document_type="review",
         )
 
-    def _es_scenario_2_semantic_search(self, query: str, limit: int) -> dict[str, Any]:
+    def _es_scenario_3_hybrid_search(self, query: str, limit: int) -> dict[str, Any]:
+        from backend.services.gemini_embedding import embed_query
+
+        query_vector = embed_query(query)
         body = {
             "track_total_hits": True,
             "size": limit,
             "query": {
-                "multi_match": {
-                    "query": query,
-                    "type": "best_fields",
-                    "fields": [
-                        "title^4",
-                        "features^2",
-                        "brand^2",
-                        "category^2",
-                        "description",
-                        "review_text",
-                    ],
-                    "operator": "or",
-                    "minimum_should_match": "2<70%",
+                "bool": {
+                    "should": [
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "type": "best_fields",
+                                "fields": [
+                                    "title^4",
+                                    "features^2",
+                                    "brand^2",
+                                    "category^2",
+                                    "description",
+                                    "review_text",
+                                ],
+                                "operator": "or",
+                                "minimum_should_match": "2<70%",
+                            }
+                        }
+                    ]
                 }
+            },
+            "knn": {
+                "field": "title_embedding",
+                "query_vector": query_vector,
+                "k": limit,
+                "num_candidates": limit * 10,
             },
             "highlight": {"fields": {"title": {}, "description": {}, "review_text": {}}},
         }
@@ -454,21 +383,16 @@ class WorkflowService:
         result = self._engine_result(
             "elasticsearch",
             response,
-            "Synonym-aware multi_match: the product_search analyzer expands intent terms (anc/headphones/wireless/etc.) at query time, then ranks across title, features, brand, category, description, and review_text.",
+            "Hybrid Search: BM25 text matching (synonym-expanded multi_match) combined with Gemini KNN vector search using Reciprocal Rank Fusion.",
             number_of_requests=1,
             has_aggregation=False,
             has_custom_ranking=True,
             backend_complexity="Low",
-            score=4,
+            score=5,
         )
-        result["semantic_capability"] = {
-            "semantic_config": "synonym_graph filter (anc/headphones/wireless/cheap) on the product_search analyzer; multi_match across title, brand, category, features, description, review_text",
-            "model_source": "none; intent is captured via curated synonyms instead of an embedding model",
-            "conclusion": "Stays close to user intent without external embeddings, at the cost of true semantic generalization.",
-        }
         return result
 
-    def _meili_scenario_2_semantic_search(self, query: str, limit: int) -> dict[str, Any]:
+    def _meili_scenario_3_lexical_search(self, query: str, limit: int) -> dict[str, Any]:
         response = self.meili.index(PRODUCT_INDEX).search(
             query,
             {
@@ -480,21 +404,16 @@ class WorkflowService:
         )
         result = self._meili_result(
             response,
-            "No external model or user-provided embeddings are configured, so Meilisearch runs normal full-text search only.",
+            "No embedding model configured. Meilisearch runs lexical full-text search only.",
             number_of_requests=1,
             has_aggregation=False,
             has_custom_ranking=False,
             backend_complexity="Low",
             score=2,
         )
-        result["semantic_capability"] = {
-            "semantic_config": "none under this constraint",
-            "model_source": "not configured; OpenAI/Hugging Face/Ollama/REST/user-provided embeddings are excluded",
-            "conclusion": "Falls back to lexical full-text search.",
-        }
         return result
 
-    def _pg_scenario_2_semantic_search(self, query: str, limit: int) -> dict[str, Any]:
+    def _pg_scenario_3_lexical_search(self, query: str, limit: int) -> dict[str, Any]:
         sql = """
             WITH q AS (
                 SELECT websearch_to_tsquery('english', %s) AS tsq
@@ -514,21 +433,16 @@ class WorkflowService:
             hits = conn.execute(sql, [query, limit]).fetchall()
         result = self._pg_result(
             hits,
-            "PostgreSQL core has no embedding model. Without external embeddings, this remains standard full-text search.",
+            "PostgreSQL has no embedding model. This remains standard full-text search.",
             number_of_requests=1,
             has_aggregation=False,
             has_custom_ranking=False,
             backend_complexity="Medium",
             score=2,
         )
-        result["semantic_capability"] = {
-            "semantic_config": "none in PostgreSQL core",
-            "model_source": "PostgreSQL core has no embedding generator; vector storage alone would still need embeddings",
-            "conclusion": "Falls back to lexical full-text search.",
-        }
         return result
 
-    def _es_scenario_3_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
+    def _es_scenario_4_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
         rating_filter, _sentiment = self._review_rating_filter(query)
         body = {
             "track_total_hits": True,
@@ -548,14 +462,18 @@ class WorkflowService:
             },
             "aggs": {
                 "brands": {
-                    "terms": {"field": "brand", "size": 10},
+                    "terms": {
+                        "field": "brand",
+                        "size": 10,
+                        "order": [{"_count": "desc"}, {"avg_rating": "asc"}],
+                    },
                     "aggs": {
                         "avg_rating": {"avg": {"field": "rating"}},
                         "total_helpful_votes": {"sum": {"field": "helpful_vote"}},
                     },
                 },
                 "categories": {"terms": {"field": "category", "size": 10}},
-                "rating_distribution": {"terms": {"field": "rating", "size": 5, "order": {"_key": "asc"}}},
+                "rating_distribution": {"histogram": {"field": "rating", "interval": 1}},
                 "avg_rating": {"avg": {"field": "rating"}},
             },
         }
@@ -577,7 +495,7 @@ class WorkflowService:
         )
         return result
 
-    def _meili_scenario_3_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
+    def _meili_scenario_4_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
         response, docs = self._meili_matching_reviews(query)
         analytics = self._build_meili_analytics(response, docs)
         return {
@@ -599,7 +517,7 @@ class WorkflowService:
             "scorecard": {"overall": 2},
         }
 
-    def _pg_scenario_3_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
+    def _pg_scenario_4_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
         operator, threshold, _sentiment = self._pg_review_filter(query)
         rating_clause = f"reviews.rating {operator} %s"
         with psycopg.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
@@ -1042,7 +960,7 @@ class WorkflowService:
         reasons = {
             "scenario-1-product-search": "Elasticsearch ranks fuzzy multi_match across boosted product fields, so typo-heavy queries still surface the right products.",
             "scenario-2-review-search": "Elasticsearch combines review text match with rating filter, helpful_vote sort, and inline highlights in a single request.",
-            "scenario-3-intent-aware-search": "Elasticsearch combines a curated synonym graph with boosted multi_match, so paraphrased intent queries still hit relevant products without an embedding model.",
+            "scenario-3-intent-aware-search": "Elasticsearch uses Gemini embedding vectors combined with BM25 text matching (Hybrid Search) to understand user intent semantically, while Meilisearch and PostgreSQL fall back to lexical search.",
             "scenario-4-analytics-aggregation": "Elasticsearch combines full-text review search, rating filters and aggregations in the same engine without app-side fallback.",
         }
         return reasons[scenario_id]

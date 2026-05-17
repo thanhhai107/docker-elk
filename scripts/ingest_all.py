@@ -124,6 +124,7 @@ def parse_args() -> argparse.Namespace:
         help="Choose one engine to ingest, or all engines.",
     )
     parser.add_argument("--reset", action="store_true")
+    parser.add_argument("--skip-embeddings", action="store_true", help="Skip Gemini embedding generation for Elasticsearch products.")
     return parser.parse_args()
 
 
@@ -238,16 +239,46 @@ def ingest_postgres(
     log_done("PostgreSQL ingest", started_at)
 
 
+def _build_embedding_text(product: dict[str, Any]) -> str:
+    parts = [product.get("title", "")]
+    features = product.get("features", "")
+    if features:
+        parts.append(features[:200])
+    description = product.get("description", "")
+    if description:
+        parts.append(description[:200])
+    return " ".join(parts)
+
+
+def _generate_embeddings(products: list[dict[str, Any]]) -> None:
+    from backend.services.gemini_embedding import embed_texts
+
+    texts = [_build_embedding_text(p) for p in products]
+    log(f"Generating Gemini embeddings for {len(texts)} products...")
+    embeddings = embed_texts(texts)
+    for product, embedding in zip(products, embeddings):
+        product["title_embedding"] = embedding
+    log(f"Gemini embeddings generated for {len(embeddings)} products")
+
+
 def ingest_elasticsearch(
     products: list[dict[str, Any]],
     reset: bool,
     chunk_size: int,
     request_timeout: int,
     max_retries: int,
+    skip_embeddings: bool = False,
 ) -> None:
     started_at = time.perf_counter()
     log(f"Elasticsearch products: creating indices reset={reset}")
     create_indices(reset=reset)
+    if not skip_embeddings:
+        try:
+            _generate_embeddings(products)
+        except Exception as exc:
+            log(f"WARNING: Gemini embedding failed ({exc}), continuing without embeddings")
+    else:
+        log("Skipping Gemini embedding generation (--skip-embeddings)")
     client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
     actions = [
         {"_index": "amazon_electronics_products", "_id": product["product_id"], "_source": product}
@@ -419,6 +450,7 @@ def main() -> int:
             args.es_bulk_chunk_size,
             args.es_request_timeout,
             args.es_max_retries,
+            skip_embeddings=args.skip_embeddings,
         )
         log("Ingesting Elasticsearch reviews...")
         ingest_elasticsearch_reviews(
