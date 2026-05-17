@@ -21,7 +21,7 @@ SERVICE_LABELS = {
 }
 SCENARIOS = [
     ("scenario-1-full-text-keyword-search", "Scenario 1: Full-text/Keyword Search"),
-    ("scenario-2-semantic-search", "Scenario 2: Semantic Search"),
+    ("scenario-2-semantic-search", "Scenario 2: Intent-Aware Search"),
     ("scenario-3-analytics-aggregation", "Scenario 3: Analytics & Aggregation"),
 ]
 
@@ -94,6 +94,22 @@ def get_json(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     return response.json()
 
 
+@st.cache_data(ttl=10, show_spinner=False)
+def fetch_suggestions(prefix: str, limit: int = 5) -> list[str]:
+    if not prefix or len(prefix) < 2:
+        return []
+    try:
+        data = get_json("/search/elasticsearch/as-you-type", {"q": prefix, "limit": limit})
+    except requests.RequestException:
+        return []
+    titles: list[str] = []
+    for hit in data.get("hits", []):
+        title = hit.get("title")
+        if title and title not in titles:
+            titles.append(title)
+    return titles[:limit]
+
+
 def clean_highlight(value: Any) -> str:
     return unescape(str(value or "")).replace("<em>", "<mark>").replace("</em>", "</mark>")
 
@@ -149,9 +165,6 @@ def render_product_hit(hit: dict[str, Any]) -> None:
         )
     )
 
-    if semantic:
-        st.markdown("**Semantic match**")
-        st.markdown(semantic, unsafe_allow_html=True)
     if review:
         st.markdown("**Review evidence**")
         st.markdown(review, unsafe_allow_html=True)
@@ -321,11 +334,8 @@ st.set_page_config(page_title="Amazon Electronics Search Demo", layout="wide")
 st.markdown(
     """
     <style>
-    div[data-testid="stFormSubmitButton"] {
+    div[data-testid="stHorizontalBlock"] div[data-testid="column"]:has(> div > div > div > button[kind="primary"]) > div {
         padding-top: 1.72rem;
-    }
-    div[data-testid="stForm"] button[kind="primaryFormSubmit"] {
-        width: 100%;
     }
     mark {
         background-color: #fff176;
@@ -345,32 +355,47 @@ service_labels = {label: engine for engine, label in SERVICE_LABELS.items()}
 if "search_request" not in st.session_state:
     st.session_state.search_request = None
 
-st.markdown("## 1. Input & Search Options")
-with st.form("search_form", border=False):
-    search_col, scenario_col, service_col, limit_col, button_col = st.columns([4.4, 2.4, 1.9, 1.1, 1])
-    with search_col:
-        query = st.text_input(
-            "Search query",
-            placeholder="Type your product need, review problem, or analytics keyword",
-        )
-    with scenario_col:
-        selected_label = st.selectbox("Scenario", list(scenario_labels))
-    with service_col:
-        selected_service_label = st.selectbox("Service", list(service_labels))
-    with limit_col:
-        limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1)
-    with button_col:
-        submitted = st.form_submit_button("Search", use_container_width=True)
+if "query_value" not in st.session_state:
+    st.session_state.query_value = ""
+if "trigger_search" not in st.session_state:
+    st.session_state.trigger_search = False
 
-if submitted:
-    selected_scenario = scenario_labels[selected_label]
-    selected_service = service_labels[selected_service_label]
-    cleaned_query = query.strip()
+st.markdown("## 1. Input & Search Options")
+search_col, scenario_col, service_col, limit_col, button_col = st.columns([4.4, 2.4, 1.9, 1.1, 1])
+with search_col:
+    query = st.text_input(
+        "Search query",
+        key="query_value",
+        placeholder="Type your product need, review problem, or analytics keyword",
+    )
+with scenario_col:
+    selected_label = st.selectbox("Scenario", list(scenario_labels), key="scenario_label")
+with service_col:
+    selected_service_label = st.selectbox("Service", list(service_labels), key="service_label")
+with limit_col:
+    limit = st.number_input("Top results", min_value=3, max_value=20, value=10, step=1, key="limit_value")
+with button_col:
+    submitted = st.button("Search", use_container_width=True, key="search_button")
+
+suggestions = fetch_suggestions(query.strip()) if query else []
+if suggestions:
+    st.caption("Suggestions (search-as-you-type)")
+    suggestion_cols = st.columns(len(suggestions))
+    for index, (sug_col, suggestion) in enumerate(zip(suggestion_cols, suggestions)):
+        with sug_col:
+            if st.button(suggestion, key=f"suggestion_{index}", use_container_width=True):
+                st.session_state.query_value = suggestion
+                st.session_state.trigger_search = True
+                st.rerun()
+
+if submitted or st.session_state.trigger_search:
+    st.session_state.trigger_search = False
+    cleaned_query = st.session_state.query_value.strip()
     st.session_state.search_request = {
-        "scenario_id": selected_scenario,
+        "scenario_id": scenario_labels[st.session_state.scenario_label],
         "query": cleaned_query or None,
-        "limit": int(limit),
-        "engine": selected_service,
+        "limit": int(st.session_state.limit_value),
+        "engine": service_labels[st.session_state.service_label],
     }
 
 if st.session_state.search_request:
