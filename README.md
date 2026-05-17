@@ -121,30 +121,18 @@ copy plus two replica copies on different Elasticsearch nodes.
 ### Streamlit cluster resilience demo
 
 Open Streamlit and select `Feature: Elasticsearch Cluster Resilience`.
-The page refreshes the same checks used in Kibana Dev Tools:
+The page shows the key cluster indicators: health, node count, online workers,
+active shard percentage, unassigned shards, relocation, recovery activity,
+nodes, shard placement, allocation, and recovery rows. It also includes a
+single state-aware control button and an Elasticsearch product search test so
+you can show search behavior while the cluster is healthy, degraded, and
+recovering. The search test uses the same Input query and Search button as the
+other scenarios/features. The cluster status auto-refreshes every 5 seconds.
+When all 5 nodes are available, the button simulates failure by stopping 1-2
+random online workers. In `Degraded mode`, the same button starts all
+configured workers that are currently offline.
 
-```text
-GET _cat/health?v
-GET _cluster/health?pretty
-GET _cat/nodes?v
-GET _cat/shards/amazon_electronics_*?v
-GET _cat/allocation?v
-GET _cluster/allocation/explain
-GET _cat/recovery/amazon_electronics_*?v
-```
-
-Use the step selector while running the node action manually on the target VM,
-or enable backend SSH control to use the Stop/Start buttons in Streamlit.
-
-```bash
-cd /opt/nexus/docker-elk && docker compose stop elasticsearch
-cd /opt/nexus/docker-elk && docker compose start elasticsearch
-```
-
-The same page includes an Elasticsearch product search test so you can show
-search behavior when the cluster has 5 nodes, 4 nodes, and after recovery.
-
-To enable the Streamlit Stop/Start buttons, configure the backend with an
+To enable the state-aware control button, configure the backend with an
 allowlist of worker hosts:
 
 ```env

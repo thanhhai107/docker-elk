@@ -1,3 +1,4 @@
 requests>=2.32,<3
 streamlit>=1.40,<2
+streamlit-autorefresh>=1.0,<2
 streamlit-searchbox>=0.1.18,<1

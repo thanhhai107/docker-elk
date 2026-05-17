@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import os
+import random
 from html import unescape
 from typing import Any
 
 import requests
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 from streamlit_searchbox import st_searchbox
 
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+CLUSTER_REFRESH_INTERVAL_MS = 5000
 SEMANTIC_FEATURE_ID = "feature-elasticsearch-semantic-search"
 CLUSTER_FEATURE_ID = "feature-elasticsearch-cluster-resilience"
 
@@ -34,29 +37,6 @@ FEATURES = [
 FEATURE_IDS = {feature_id for feature_id, _label in FEATURES}
 EXPERIENCES = SCENARIOS + FEATURES
 FEATURE_TITLES = dict(FEATURES)
-CLUSTER_DEMO_STEPS = [
-    {
-        "id": "full",
-        "label": "Step 1: Full 5-node cluster",
-        "expected_nodes": 5,
-        "command": (
-            'curl "http://localhost:9200/_cluster/health?pretty"\n'
-            'curl "http://localhost:9200/_cat/nodes?v&h=name,node.role,master,ip"'
-        ),
-    },
-    {
-        "id": "degraded",
-        "label": "Step 2: Stop one Elasticsearch node",
-        "expected_nodes": 4,
-        "command": "cd /opt/nexus/docker-elk && docker compose stop elasticsearch",
-    },
-    {
-        "id": "restored",
-        "label": "Step 3: Start the node again",
-        "expected_nodes": 5,
-        "command": "cd /opt/nexus/docker-elk && docker compose start elasticsearch",
-    },
-]
 
 SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
     "scenario-1-product-search": {
@@ -152,8 +132,6 @@ def request_error_detail(exc: requests.RequestException) -> str:
     detail = payload.get("detail")
     if isinstance(detail, dict):
         lines = []
-        if detail.get("command"):
-            lines.append(f"Command: {detail['command']}")
         if detail.get("stderr"):
             lines.append(f"stderr: {detail['stderr']}")
         if detail.get("stdout"):
@@ -353,7 +331,6 @@ def render_result(result: dict[str, Any]) -> None:
             )
             hits = section.get("hits", [])
             if not hits:
-                st.info("No result documents returned for this section.")
                 continue
             for hit in hits[:5]:
                 render_hit(hit, section.get("document_type", "product"))
@@ -361,7 +338,6 @@ def render_result(result: dict[str, Any]) -> None:
 
     hits = result.get("hits", [])
     if not hits and result.get("document_type") != "analytics":
-        st.info("No result documents returned for this service.")
         return
 
     for hit in hits[:5]:
@@ -423,10 +399,9 @@ def render_cluster_table(
     *,
     expanded: bool = False,
 ) -> None:
+    if not rows:
+        return
     with st.expander(title, expanded=expanded):
-        if not rows:
-            st.info("No rows returned.")
-            return
         st.dataframe(cluster_table_rows(rows, columns), use_container_width=True, hide_index=True)
 
 
@@ -451,11 +426,10 @@ def render_cluster_health_banner(status: str) -> None:
 
 def render_allocation_explain(allocation_explain: dict[str, Any]) -> None:
     status = allocation_explain.get("status", "unknown")
+    if status == "no_unassigned_shards":
+        return
     expanded = status == "error"
-    with st.expander("GET _cluster/allocation/explain", expanded=expanded):
-        if status == "no_unassigned_shards":
-            st.info(allocation_explain.get("message", "No unassigned shards need allocation explanation."))
-            return
+    with st.expander("Allocation explanation", expanded=expanded):
         if status == "error":
             st.error(allocation_explain.get("message", "Allocation explain failed."))
             return
@@ -466,13 +440,136 @@ def render_allocation_explain(allocation_explain: dict[str, Any]) -> None:
         st.json(body)
 
 
-def render_cluster_status(data: dict[str, Any], expected_nodes: int) -> None:
+def target_is_online(target: dict[str, Any], nodes: list[dict[str, Any]]) -> bool:
+    identifiers = {
+        str(target.get("id") or "").lower(),
+        str(target.get("host") or "").lower(),
+        str(target.get("label") or "").lower(),
+    }
+    identifiers.discard("")
+    for node in nodes:
+        node_values = {
+            str(node.get("name") or "").lower(),
+            str(node.get("ip") or "").lower(),
+            str(node.get("node") or "").lower(),
+        }
+        if identifiers & node_values:
+            return True
+    return False
+
+
+def cluster_worker_rows(data: dict[str, Any], config: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = data.get("nodes", [])
+    rows = []
+    for target in config.get("targets", []):
+        online = target_is_online(target, nodes)
+        rows.append(
+            {
+                "worker": target.get("label") or target.get("id"),
+                "host": target.get("host"),
+                "status": "online" if online else "offline",
+            }
+        )
+    return rows
+
+
+def cluster_control_targets(
+    data: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    online: bool,
+) -> list[dict[str, Any]]:
+    nodes = data.get("nodes", [])
+    return [
+        target
+        for target in config.get("targets", [])
+        if target_is_online(target, nodes) == online
+    ]
+
+
+def run_targets_cluster_action(
+    selected_targets: list[dict[str, Any]],
+    action: str,
+) -> dict[str, Any]:
+    results = []
+    for target in selected_targets:
+        target_id = target["id"]
+        try:
+            result = run_cluster_control_action(target_id, action)
+        except requests.RequestException as exc:
+            result = {
+                "ok": False,
+                "target": target_id,
+                "action": action,
+                "error": request_error_detail(exc),
+            }
+        results.append(result)
+
+    return {
+        "ok": all(result.get("ok") for result in results),
+        "action": action,
+        "targets": [target["id"] for target in selected_targets],
+        "results": results,
+    }
+
+
+def run_random_stop_action(data: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    candidates = cluster_control_targets(data, config, online=True)
+    if not candidates:
+        return {
+            "ok": False,
+            "action": "stop",
+            "message": "No online workers are available for random stop.",
+            "results": [],
+        }
+    count = random.randint(1, min(2, len(candidates)))
+    return run_targets_cluster_action(random.sample(candidates, count), "stop")
+
+
+def run_recover_action(data: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    candidates = cluster_control_targets(data, config, online=False)
+    if not candidates:
+        return {
+            "ok": False,
+            "action": "start",
+            "message": "No offline workers are available for recovery.",
+            "results": [],
+        }
+    return run_targets_cluster_action(candidates, "start")
+
+
+def cluster_expected_nodes(config: dict[str, Any]) -> int | None:
+    targets = config.get("targets", [])
+    if not targets:
+        return None
+    return len(targets) + 1
+
+
+def cluster_is_fully_available(data: dict[str, Any], config: dict[str, Any]) -> bool:
+    expected_nodes = cluster_expected_nodes(config)
+    if expected_nodes is None:
+        return False
+    summary = data.get("summary", {})
+    node_count = int(summary.get("node_count") or 0)
+    worker_rows = cluster_worker_rows(data, config)
+    return (
+        node_count == expected_nodes
+        and bool(worker_rows)
+        and all(row["status"] == "online" for row in worker_rows)
+    )
+
+
+def render_cluster_status(data: dict[str, Any], config: dict[str, Any]) -> None:
     summary = data.get("summary", {})
     status = str(summary.get("status") or "unknown").lower()
     node_count = int(summary.get("node_count") or 0)
     node_delta = None
-    if node_count != expected_nodes:
+    expected_nodes = cluster_expected_nodes(config)
+    if expected_nodes is not None and node_count != expected_nodes:
         node_delta = f"{node_count - expected_nodes:+d} vs expected"
+    worker_rows = cluster_worker_rows(data, config)
+    online_workers = sum(1 for row in worker_rows if row["status"] == "online")
+    worker_total = len(worker_rows)
 
     st.markdown("## Cluster Status")
     st.caption(
@@ -483,13 +580,13 @@ def render_cluster_status(data: dict[str, Any], expected_nodes: int) -> None:
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Nodes", node_count, delta=node_delta)
-    m2.metric("Data nodes", summary.get("data_node_count", 0))
-    m3.metric("Demo shards", summary.get("demo_shard_count", 0))
-    m4.metric("Active shards", summary.get("active_shards", 0))
+    m2.metric("Workers online", f"{online_workers}/{worker_total}" if worker_total else "n/a")
+    m3.metric("Active shard %", format_percent(summary.get("active_shards_percent")))
+    m4.metric("Unassigned shards", summary.get("unassigned_shards", 0))
 
     m5, m6, m7, m8 = st.columns(4)
-    m5.metric("Active shard %", format_percent(summary.get("active_shards_percent")))
-    m6.metric("Unassigned", summary.get("unassigned_shards", 0))
+    m5.metric("Data nodes", summary.get("data_node_count", 0))
+    m6.metric("Demo shards", summary.get("demo_shard_count", 0))
     m7.metric("Relocating", summary.get("relocating_shards", 0))
     m8.metric("Recovery active", summary.get("recovery_active", 0))
 
@@ -506,193 +603,121 @@ def render_cluster_status(data: dict[str, Any], expected_nodes: int) -> None:
             for label, error in errors.items():
                 st.error(f"{label}: {error}")
 
-    render_cluster_table(
-        "GET _cat/nodes?v",
-        data.get("nodes", []),
-        ["name", "node.role", "master", "ip"],
-        expanded=True,
+    nodes_tab, shards_tab, allocation_tab, recovery_tab = st.tabs(
+        ["Nodes", "Shards", "Allocation", "Recovery"]
     )
-    render_cluster_table(
-        "GET _cat/shards/amazon_electronics_*?v",
-        data.get("shards", []),
-        ["index", "shard", "prirep", "state", "docs", "store", "ip", "node", "unassigned.reason"],
-        expanded=True,
-    )
-    render_cluster_table(
-        "GET _cat/allocation?v",
-        data.get("allocation", []),
-        ["node", "shards", "disk.indices", "disk.used", "disk.avail", "disk.total", "disk.percent", "ip"],
-    )
-    render_allocation_explain(data.get("allocation_explain", {}))
-    render_cluster_table(
-        "GET _cat/recovery/amazon_electronics_*?v",
-        data.get("recovery", []),
-        ["index", "shard", "time", "type", "stage", "source_node", "target_node", "files_percent", "bytes_percent"],
-        expanded=bool(summary.get("recovery_active")),
-    )
-
-    with st.expander("GET _cluster/health?pretty"):
-        st.json(data.get("cluster_health", {}))
-    with st.expander("GET _cat/health?v"):
-        cat_health = data.get("cat_health", [])
-        if cat_health:
-            st.dataframe(cat_health, use_container_width=True, hide_index=True)
-        else:
-            st.info("No health row returned.")
-
-
-def render_cluster_search_test() -> None:
-    if "cluster_search_request" not in st.session_state:
-        st.session_state.cluster_search_request = None
-
-    st.markdown("## Search Test")
-    query_col, limit_col, button_col = st.columns([5, 1.4, 1.8])
-    with query_col:
-        query = st.text_input(
-            "Elasticsearch query",
-            value="wireless noise cancelling headphones",
-            key="cluster_search_query",
+    with nodes_tab:
+        if worker_rows:
+            st.markdown("#### Worker control targets")
+            st.dataframe(worker_rows, use_container_width=True, hide_index=True)
+        render_cluster_table(
+            "Cluster nodes",
+            data.get("nodes", []),
+            ["name", "node.role", "master", "ip"],
+            expanded=True,
         )
-    with limit_col:
-        limit = st.number_input(
-            "Top results",
-            min_value=3,
-            max_value=20,
-            value=5,
-            step=1,
-            key="cluster_search_limit",
+    with shards_tab:
+        render_cluster_table(
+            "Amazon Electronics shards",
+            data.get("shards", []),
+            ["index", "shard", "prirep", "state", "docs", "store", "node", "unassigned.reason"],
+            expanded=True,
         )
-    with button_col:
-        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        run_search_button = st.button("Run search", use_container_width=True, key="cluster_search_button")
-
-    if run_search_button:
-        selected_query = query.strip()
-        if not selected_query:
-            st.warning("Please enter a query before searching.")
-            st.session_state.cluster_search_request = None
-        else:
-            st.session_state.cluster_search_request = {
-                "query": selected_query,
-                "limit": int(limit),
-            }
-
-    request = st.session_state.cluster_search_request
-    if not request:
-        return
-
-    try:
-        data = get_json(
-            "/scenarios/scenario-1-product-search",
-            {
-                "q": request["query"],
-                "limit": request["limit"],
-                "engine": "elasticsearch",
-            },
+    with allocation_tab:
+        render_cluster_table(
+            "Disk and shard allocation",
+            data.get("allocation", []),
+            ["node", "shards", "disk.indices", "disk.used", "disk.avail", "disk.total", "disk.percent", "ip"],
+            expanded=True,
         )
-    except requests.RequestException as exc:
-        st.error(f"Backend is not ready: {request_error_detail(exc)}")
-        return
+        render_allocation_explain(data.get("allocation_explain", {}))
+    with recovery_tab:
+        render_cluster_table(
+            "Shard recovery",
+            data.get("recovery", []),
+            ["index", "shard", "time", "type", "stage", "source_node", "target_node", "files_percent", "bytes_percent"],
+            expanded=True,
+        )
 
-    results = data.get("results", [])
-    if results:
-        render_result(results[0])
 
-
-def render_cluster_control_panel(fallback_command: str) -> None:
-    st.markdown("## Node Control")
-    try:
-        config = fetch_cluster_control_config()
-    except requests.RequestException as exc:
-        st.warning(f"Cluster control config is not available: {request_error_detail(exc)}")
-        st.code(fallback_command, language="bash")
-        return
-
+def render_cluster_control_panel(data: dict[str, Any], config: dict[str, Any]) -> None:
     if not config.get("configured"):
-        st.info(
-            "Automatic node control is disabled. Configure ELASTICSEARCH_CONTROL_ENABLED "
-            "and ELASTICSEARCH_CONTROL_TARGETS on the backend to enable the buttons."
-        )
-        st.code(fallback_command, language="bash")
         return
 
+    st.markdown("## Cluster Controls")
     targets = config.get("targets", [])
     if not targets:
         st.warning("No Elasticsearch control targets are configured.")
-        st.code(fallback_command, language="bash")
         return
 
     if "cluster_control_result" not in st.session_state:
         st.session_state.cluster_control_result = None
 
-    target_options = {
-        f"{target.get('label', target['id'])} ({target.get('host', target['id'])})": target["id"]
-        for target in targets
-    }
-    target_col, stop_col, start_col, restart_col = st.columns([4, 1.4, 1.4, 1.4])
-    with target_col:
-        selected_target_label = st.selectbox("Target node", list(target_options), key="cluster_control_target")
-    selected_target = target_options[selected_target_label]
+    offline_targets = cluster_control_targets(data, config, online=False)
+    online_targets = cluster_control_targets(data, config, online=True)
+    fully_available = cluster_is_fully_available(data, config)
+    if fully_available:
+        mode_label = "Healthy"
+        button_label = f"Simulate failure: stop random 1-2 workers ({len(online_targets)} available)"
+        button_help = "The demo will randomly stop one or two online workers."
+        disabled = not online_targets
+    else:
+        mode_label = "Degraded mode"
+        button_label = f"Recover cluster: start all offline workers ({len(offline_targets)} offline)"
+        button_help = "The demo will start every configured worker that is currently offline."
+        disabled = not offline_targets
 
-    action = None
-    with stop_col:
-        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        if st.button("Stop", use_container_width=True, key="cluster_stop_button"):
-            action = "stop"
-    with start_col:
-        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        if st.button("Start", use_container_width=True, key="cluster_start_button"):
-            action = "start"
-    with restart_col:
-        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        if st.button("Restart", use_container_width=True, key="cluster_restart_button"):
-            action = "restart"
+    if fully_available:
+        st.success(f"Mode: {mode_label}")
+    else:
+        st.warning(f"Mode: {mode_label}")
 
-    if action:
-        with st.spinner(f"Running {action} on {selected_target}..."):
-            try:
-                st.session_state.cluster_control_result = run_cluster_control_action(selected_target, action)
-            except requests.RequestException as exc:
-                st.session_state.cluster_control_result = None
-                st.error(f"Cluster control failed: {request_error_detail(exc)}")
+    if st.button(
+        button_label,
+        use_container_width=True,
+        key="cluster_state_action_button",
+        disabled=disabled,
+        help=button_help,
+    ):
+        if fully_available:
+            with st.spinner("Stopping random workers..."):
+                st.session_state.cluster_control_result = run_random_stop_action(data, config)
+        else:
+            with st.spinner("Recovering offline workers..."):
+                st.session_state.cluster_control_result = run_recover_action(data, config)
+        st.rerun()
 
     result = st.session_state.cluster_control_result
     if result:
-        status_message = f"{result.get('action', 'action')} {result.get('target', '')}"
+        targets_label = ", ".join(result.get("targets", [])) or result.get("target", "")
+        status_message = f"{result.get('action', 'action')} {targets_label}".strip()
         if result.get("ok"):
             st.success(f"Completed: {status_message}")
         else:
-            st.error(f"Failed: {status_message}")
-        with st.expander("Last control command"):
-            st.code(result.get("command", ""), language="bash")
-            if result.get("stdout"):
-                st.markdown("**stdout**")
-                st.code(result["stdout"])
-            if result.get("stderr"):
-                st.markdown("**stderr**")
-                st.code(result["stderr"])
+            st.error(result.get("message") or f"Failed: {status_message}")
+        failed_results = [item for item in result.get("results", []) if not item.get("ok")]
+        if failed_results:
+            with st.expander("Control errors", expanded=True):
+                for item in failed_results:
+                    st.markdown(f"**{item.get('target', 'unknown')}**")
+                    error = item.get("error") or item.get("stderr") or "Unknown error"
+                    st.code(str(error))
 
 
 def render_cluster_resilience_demo() -> None:
-    step_labels = {step["label"]: step for step in CLUSTER_DEMO_STEPS}
-    selected_step_label = st.radio(
-        "Demo step",
-        list(step_labels),
-        horizontal=True,
-        key="cluster_demo_step",
-    )
-    selected_step = step_labels[selected_step_label]
-
-    render_cluster_control_panel(selected_step["command"])
-
     try:
         data = fetch_cluster_status()
     except requests.RequestException as exc:
         st.error(f"Backend is not ready: {request_error_detail(exc)}")
         return
+    try:
+        config = fetch_cluster_control_config()
+    except requests.RequestException as exc:
+        config = {"configured": False, "targets": []}
+        st.warning(f"Cluster control config is not available: {request_error_detail(exc)}")
 
-    render_cluster_status(data, int(selected_step["expected_nodes"]))
-    render_cluster_search_test()
+    render_cluster_control_panel(data, config)
+    render_cluster_status(data, config)
 
 
 def run_search(experience_id: str, selected_query: str | None, limit: int, engine: str) -> None:
@@ -713,6 +738,9 @@ def run_search(experience_id: str, selected_query: str | None, limit: int, engin
                 "winner_reason": None,
                 "results": [result],
             }
+        elif experience_id == CLUSTER_FEATURE_ID:
+            params["engine"] = "elasticsearch"
+            data = get_json("/scenarios/scenario-1-product-search", params)
         else:
             params["engine"] = engine
             data = get_json(f"/scenarios/{experience_id}", params)
@@ -763,16 +791,7 @@ with scenario_col:
 selected_experience_id = experience_labels[selected_label]
 
 if selected_experience_id == CLUSTER_FEATURE_ID:
-    available_service_labels = {"Elasticsearch": "elasticsearch"}
-    if st.session_state.get("service_label") not in available_service_labels:
-        st.session_state.service_label = "Elasticsearch"
-    with service_col:
-        st.selectbox("Service", list(available_service_labels), key="service_label", disabled=True)
-    with button_col:
-        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        st.button("Refresh", use_container_width=True, key="cluster_refresh_button")
-    render_cluster_resilience_demo()
-    st.stop()
+    st_autorefresh(interval=CLUSTER_REFRESH_INTERVAL_MS, key="cluster_resilience_autorefresh")
 
 available_service_labels = (
     {"Elasticsearch": "elasticsearch"}
@@ -802,6 +821,9 @@ selected_suggestion = st_searchbox(
     clear_on_submit=False,
     edit_after_submit="current",
 )
+
+if selected_experience_id == CLUSTER_FEATURE_ID:
+    render_cluster_resilience_demo()
 
 auto_run = False
 if isinstance(selected_suggestion, str) and selected_suggestion and selected_suggestion != st.session_state.selected_query:
@@ -841,5 +863,3 @@ if st.session_state.search_request:
             request["limit"],
             request.get("engine", "all"),
         )
-else:
-    st.info("Enter a query, choose a scenario, then press Search.")
