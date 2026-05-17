@@ -97,7 +97,7 @@ class ElasticsearchSearchService:
         }
 
     def semantic_search(self, q: str, limit: int = 10) -> dict[str, Any]:
-        from backend.services.vertex_embedding import EMBEDDING_DIMS, EMBEDDING_MODEL, embed_query
+        from backend.services.vertex_embedding import embed_query
 
         started = perf_counter()
         query_vector = embed_query(q)
@@ -159,7 +159,7 @@ class ElasticsearchSearchService:
                     "hits": semantic_hits,
                     "has_highlight": False,
                     "took_ms": semantic_took_ms,
-                    "note": "Vector-only KNN search on title_embedding. Highlight is disabled to show this side is not keyword evidence.",
+                    "number_of_requests": 1,
                 },
                 {
                     "title": "Keyword Search",
@@ -169,7 +169,7 @@ class ElasticsearchSearchService:
                     "hits": keyword_hits,
                     "has_highlight": True,
                     "took_ms": keyword_took_ms,
-                    "note": "BM25-style multi_match over product text fields with highlights enabled.",
+                    "number_of_requests": 1,
                 },
             ],
             "section_layout": "columns",
@@ -182,24 +182,6 @@ class ElasticsearchSearchService:
             "has_custom_ranking": True,
             "backend_complexity": "Low",
             "scorecard": {"overall": 5},
-            "note": (
-                "This feature compares Elasticsearch vector semantic retrieval against keyword "
-                "multi_match retrieval for the same query."
-            ),
-            "semantic_capability": {
-                "semantic_config": (
-                    "Left: vector-only KNN over title_embedding dense_vector with no highlight. "
-                    "Right: keyword multi_match with highlight."
-                ),
-                "model_source": (
-                    f"Vertex AI {EMBEDDING_MODEL} creates the query vector; ingest stores "
-                    "product title/features/description embeddings in Elasticsearch."
-                ),
-                "vector_field": "title_embedding",
-                "vector_dimensions": EMBEDDING_DIMS,
-                "combination": "The UI shows vector retrieval and keyword retrieval side by side for comparison.",
-                "conclusion": "Semantic Search is Elasticsearch-only here because it depends on dense_vector + KNN search.",
-            },
         }
 
     def review_analytics(self) -> dict[str, Any]:

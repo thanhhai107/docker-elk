@@ -280,16 +280,10 @@ def render_hit(hit: dict[str, Any], document_type: str) -> None:
 
 def render_result_section(section: dict[str, Any]) -> None:
     st.markdown(f"#### {section.get('title', 'Result section')}")
-    details = [
-        f"Query: `{section.get('query', '')}`",
-        f"Hits: {section.get('total', 0)}",
-    ]
-    if section.get("took_ms") is not None:
-        details.append(f"Time: {section.get('took_ms')} ms")
-    details.append(f"Highlight: {'yes' if section.get('has_highlight') else 'no'}")
-    st.caption(" | ".join(details))
-    if section.get("note"):
-        st.write(section["note"])
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Time", f"{section.get('took_ms', 0)} ms")
+    m2.metric("Requests", section.get("number_of_requests", 1))
+    m3.metric("Hits", section.get("total", 0))
 
     hits = section.get("hits", [])
     if not hits:
@@ -300,11 +294,20 @@ def render_result_section(section: dict[str, Any]) -> None:
 
 
 def render_result(result: dict[str, Any]) -> None:
-    label = ENGINE_LABELS.get(result["engine"], result["engine"])
-    st.markdown(f"### {label}")
     if result.get("error"):
         st.error(result["error"])
         return
+
+    sections = result.get("sections") or []
+    if result.get("mode") == "semantic_vs_keyword" and sections:
+        cols = st.columns(len(sections))
+        for col, section in zip(cols, sections):
+            with col:
+                render_result_section(section)
+        return
+
+    label = ENGINE_LABELS.get(result["engine"], result["engine"])
+    st.markdown(f"### {label}")
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Time", f"{result.get('took_ms', 0)} ms")
@@ -340,7 +343,6 @@ def render_result(result: dict[str, Any]) -> None:
         with st.expander("Aggregation / Facet", expanded=result.get("document_type") == "analytics"):
             st.json(aggregations)
 
-    sections = result.get("sections") or []
     if sections:
         if result.get("section_layout") == "columns":
             cols = st.columns(len(sections))
