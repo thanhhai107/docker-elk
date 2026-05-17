@@ -256,9 +256,18 @@ def render_result(result: dict[str, Any]) -> None:
     )
     st.write(result.get("note", ""))
 
-    if result.get("semantic_capability"):
-        with st.expander("Semantic capability", expanded=result.get("document_type") == "product"):
-            st.json(result["semantic_capability"])
+    capability = result.get("semantic_capability")
+    if capability:
+        with st.expander("Intent capability", expanded=False):
+            label_map = {
+                "semantic_config": "Configuration",
+                "model_source": "Model source",
+                "conclusion": "Conclusion",
+            }
+            for field, label in label_map.items():
+                value = capability.get(field)
+                if value:
+                    st.markdown(f"**{label}:** {value}")
 
     aggregations = result.get("aggregations") or {}
     if aggregations:
