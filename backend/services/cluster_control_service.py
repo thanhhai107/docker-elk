@@ -4,6 +4,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 from backend.config import settings
@@ -24,6 +25,7 @@ class ElasticsearchClusterControlService:
         self.targets = self._parse_targets(settings.elasticsearch_control_targets)
 
     def config(self) -> dict[str, Any]:
+        ssh_key_available = self._ssh_key_available()
         return {
             "enabled": settings.elasticsearch_control_enabled,
             "targets": [
@@ -34,7 +36,12 @@ class ElasticsearchClusterControlService:
             "compose_env_files": self._compose_env_files(),
             "ssh_user": settings.elasticsearch_control_ssh_user,
             "ssh_port": settings.elasticsearch_control_ssh_port,
-            "configured": bool(settings.elasticsearch_control_enabled and self.targets),
+            "ssh_key_available": ssh_key_available,
+            "configured": bool(
+                settings.elasticsearch_control_enabled
+                and self.targets
+                and ssh_key_available
+            ),
         }
 
     def run(self, target_id: str, action: NodeAction) -> dict[str, Any]:
@@ -119,6 +126,11 @@ class ElasticsearchClusterControlService:
             command.extend(["-i", settings.elasticsearch_control_ssh_key])
         command.extend([ssh_target, remote_command])
         return command
+
+    def _ssh_key_available(self) -> bool:
+        if not settings.elasticsearch_control_ssh_key:
+            return True
+        return Path(settings.elasticsearch_control_ssh_key).is_file()
 
     def _remote_command(self, action: NodeAction) -> str:
         compose_dir = shlex.quote(settings.elasticsearch_control_compose_dir)

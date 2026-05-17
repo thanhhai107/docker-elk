@@ -590,19 +590,6 @@ def render_cluster_status(data: dict[str, Any], config: dict[str, Any]) -> None:
     m7.metric("Relocating", summary.get("relocating_shards", 0))
     m8.metric("Recovery active", summary.get("recovery_active", 0))
 
-    state_counts = summary.get("shard_state_counts") or {}
-    if state_counts:
-        st.caption(
-            "Shard states: "
-            + ", ".join(f"{state}: {count}" for state, count in state_counts.items())
-        )
-
-    errors = data.get("errors") or {}
-    if errors:
-        with st.expander("Probe errors", expanded=True):
-            for label, error in errors.items():
-                st.error(f"{label}: {error}")
-
     nodes_tab, shards_tab, allocation_tab, recovery_tab = st.tabs(
         ["Nodes", "Shards", "Allocation", "Recovery"]
     )
@@ -641,13 +628,24 @@ def render_cluster_status(data: dict[str, Any], config: dict[str, Any]) -> None:
 
 
 def render_cluster_control_panel(data: dict[str, Any], config: dict[str, Any]) -> None:
+    st.markdown("## Cluster Controls")
     if not config.get("configured"):
+        st.button(
+            "Node control unavailable",
+            use_container_width=True,
+            key="cluster_state_action_button_disabled",
+            disabled=True,
+        )
         return
 
-    st.markdown("## Cluster Controls")
     targets = config.get("targets", [])
     if not targets:
-        st.warning("No Elasticsearch control targets are configured.")
+        st.button(
+            "Node control unavailable",
+            use_container_width=True,
+            key="cluster_state_action_button_no_targets",
+            disabled=True,
+        )
         return
 
     if "cluster_control_result" not in st.session_state:
@@ -658,12 +656,12 @@ def render_cluster_control_panel(data: dict[str, Any], config: dict[str, Any]) -
     fully_available = cluster_is_fully_available(data, config)
     if fully_available:
         mode_label = "Healthy"
-        button_label = f"Simulate failure: stop random 1-2 workers ({len(online_targets)} available)"
+        button_label = f"Turn off random 1-2 workers ({len(online_targets)} available)"
         button_help = "The demo will randomly stop one or two online workers."
         disabled = not online_targets
     else:
         mode_label = "Degraded mode"
-        button_label = f"Recover cluster: start all offline workers ({len(offline_targets)} offline)"
+        button_label = f"Turn on all offline workers ({len(offline_targets)} offline)"
         button_help = "The demo will start every configured worker that is currently offline."
         disabled = not offline_targets
 
@@ -758,6 +756,12 @@ st.markdown(
     div[data-testid="stHorizontalBlock"] div[data-testid="column"]:has(> div > div > div > button[kind="primary"]) > div {
         padding-top: 1.72rem;
     }
+    div[data-testid="stVerticalBlock"] > div:has(.tight-searchbox-anchor) {
+        margin-bottom: -1.05rem;
+    }
+    iframe[title="streamlit_searchbox.st_searchbox"] {
+        margin-top: -0.85rem;
+    }
     mark {
         background-color: #fff176;
         color: #111827;
@@ -813,6 +817,7 @@ with button_col:
     st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
     submitted = st.button("Search", use_container_width=True, key="search_button", help="Run search")
 
+st.markdown('<div class="tight-searchbox-anchor"></div>', unsafe_allow_html=True)
 selected_suggestion = st_searchbox(
     suggestion_search,
     placeholder="Type product, review problem, or analytics keyword",

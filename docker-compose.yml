@@ -83,10 +83,10 @@ services:
       GCP_PROJECT_ID: ${GCP_PROJECT_ID:-curious-system-496514-q2}
       GCP_LOCATION: ${GCP_LOCATION:-us-central1}
       GOOGLE_APPLICATION_CREDENTIALS: /app/gcp-key.json
-      ELASTICSEARCH_CONTROL_ENABLED: ${ELASTICSEARCH_CONTROL_ENABLED:-false}
-      ELASTICSEARCH_CONTROL_TARGETS: ${ELASTICSEARCH_CONTROL_TARGETS:-}
-      ELASTICSEARCH_CONTROL_SSH_USER: ${ELASTICSEARCH_CONTROL_SSH_USER:-}
-      ELASTICSEARCH_CONTROL_SSH_KEY: ${ELASTICSEARCH_CONTROL_SSH_KEY:-}
+      ELASTICSEARCH_CONTROL_ENABLED: ${ELASTICSEARCH_CONTROL_ENABLED:-true}
+      ELASTICSEARCH_CONTROL_TARGETS: ${ELASTICSEARCH_CONTROL_TARGETS:-nexus-worker-1=nexus-worker-1,nexus-worker-2=nexus-worker-2,nexus-worker-3=nexus-worker-3,nexus-worker-4=nexus-worker-4}
+      ELASTICSEARCH_CONTROL_SSH_USER: ${ELASTICSEARCH_CONTROL_SSH_USER:-ubuntu}
+      ELASTICSEARCH_CONTROL_SSH_KEY: ${ELASTICSEARCH_CONTROL_SSH_KEY:-/run/secrets/es-control-ssh-key}
       ELASTICSEARCH_CONTROL_SSH_PORT: ${ELASTICSEARCH_CONTROL_SSH_PORT:-22}
       ELASTICSEARCH_CONTROL_COMPOSE_DIR: ${ELASTICSEARCH_CONTROL_COMPOSE_DIR:-/opt/nexus/docker-elk}
       ELASTICSEARCH_CONTROL_COMPOSE_ENV_FILES: ${ELASTICSEARCH_CONTROL_COMPOSE_ENV_FILES:-.env,/etc/nexus-elastic.env}
@@ -96,6 +96,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./gcp-key.json:/app/gcp-key.json:ro
+      - ${ELASTICSEARCH_CONTROL_SSH_KEY_HOST:-/home/ubuntu/.ssh/id_ed25519_nexus_cluster}:${ELASTICSEARCH_CONTROL_SSH_KEY:-/run/secrets/es-control-ssh-key}:ro
     depends_on:
       postgres:
         condition: service_healthy

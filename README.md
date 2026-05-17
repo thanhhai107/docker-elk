@@ -128,36 +128,28 @@ single state-aware control button and an Elasticsearch product search test so
 you can show search behavior while the cluster is healthy, degraded, and
 recovering. The search test uses the same Input query and Search button as the
 other scenarios/features. The cluster status auto-refreshes every 5 seconds.
-When all 5 nodes are available, the button simulates failure by stopping 1-2
-random online workers. In `Degraded mode`, the same button starts all
-configured workers that are currently offline.
+When all 5 nodes are available, `Turn off random 1-2 workers` simulates
+failure. In `Degraded mode`, `Turn on all offline workers` starts every
+configured worker that is currently offline.
 
-To enable the state-aware control button, configure the backend with an
-allowlist of worker hosts:
+The GCP Terraform stack creates four private workers and installs an internal
+master-to-worker SSH key at `/home/ubuntu/.ssh/id_ed25519_nexus_cluster` on the
+master VM when `enable_master_worker_ssh = true`. The Docker Compose defaults
+use that setup:
 
 ```env
 ELASTICSEARCH_CONTROL_ENABLED=true
-ELASTICSEARCH_CONTROL_TARGETS=worker-1=nexus-worker-1,worker-2=nexus-worker-2,worker-3=nexus-worker-3,worker-4=nexus-worker-4
-ELASTICSEARCH_CONTROL_SSH_USER=<ssh-user>
+ELASTICSEARCH_CONTROL_TARGETS=nexus-worker-1=nexus-worker-1,nexus-worker-2=nexus-worker-2,nexus-worker-3=nexus-worker-3,nexus-worker-4=nexus-worker-4
+ELASTICSEARCH_CONTROL_SSH_USER=ubuntu
+ELASTICSEARCH_CONTROL_SSH_KEY_HOST=/home/ubuntu/.ssh/id_ed25519_nexus_cluster
 ELASTICSEARCH_CONTROL_SSH_KEY=/run/secrets/es-control-ssh-key
 ELASTICSEARCH_CONTROL_COMPOSE_DIR=/opt/nexus/docker-elk
 ELASTICSEARCH_CONTROL_COMPOSE_ENV_FILES=.env,/etc/nexus-elastic.env
 ```
 
-Mount the SSH private key into the backend container, for example with
-`docker-compose.override.yml`:
-
-```yaml
-services:
-  backend:
-    volumes:
-      - ./data:/app/data
-      - ./gcp-key.json:/app/gcp-key.json:ro
-      - /home/<ssh-user>/.ssh/id_rsa:/run/secrets/es-control-ssh-key:ro
-```
-
-The backend image includes `openssh-client`. Rebuild the backend after changing
-the Dockerfile or control env:
+The backend service mounts `ELASTICSEARCH_CONTROL_SSH_KEY_HOST` into the
+container automatically. The backend image includes `openssh-client`. Rebuild
+the backend after changing the Dockerfile or control env:
 
 ```bash
 docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d --build backend frontend
