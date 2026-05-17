@@ -99,20 +99,31 @@ class ElasticsearchSearchService:
         body = {
             "size": limit,
             "query": {
-                "match": {
-                    "semantic_text": {"query": q},
+                "multi_match": {
+                    "query": q,
+                    "type": "best_fields",
+                    "fields": [
+                        "title^4",
+                        "features^2",
+                        "brand^2",
+                        "category^2",
+                        "description",
+                        "review_text",
+                    ],
+                    "operator": "or",
+                    "minimum_should_match": "2<70%",
                 }
             },
-            "highlight": {"fields": {"semantic_text": {}, "title": {}, "description": {}, "review_text": {}}},
+            "highlight": {"fields": {"title": {}, "description": {}, "review_text": {}}},
         }
         response = self.client.search(index=self.index, body=body)
         return {
             "engine": self.engine,
-            "mode": "semantic_text",
+            "mode": "synonym_multi_match",
             "query": q,
             "hits": [self._hit(item) for item in response["hits"]["hits"]],
             "total": response["hits"]["total"]["value"],
-            "note": "Uses Elasticsearch semantic_text with the configured Elastic inference endpoint. Reindex after mapping changes.",
+            "note": "Synonym-aware multi_match using the product_search analyzer (synonym_graph filter expands intent terms).",
         }
 
     def review_analytics(self) -> dict[str, Any]:

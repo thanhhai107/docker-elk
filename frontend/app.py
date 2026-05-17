@@ -49,21 +49,21 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
     "scenario-2-semantic-search": {
         "elasticsearch": [
             "Target: product index.",
-            "Stores combined product text in semantic_text.",
-            "Uses Elastic's native default or configured inference endpoint.",
-            "Runs semantic retrieval without app-generated or external-provider embeddings.",
+            "Expands the query with the synonym_graph filter (anc/headphones/wireless/cheap).",
+            "Runs boosted multi_match across title, features, brand, category, description, review_text.",
+            "Captures user intent without external embedding providers.",
         ],
         "meilisearch": [
             "Target: product index.",
-            "No OpenAI/Hugging Face/Ollama/REST/user-provided embeddings are configured.",
+            "No curated synonyms or embeddings are configured here.",
             "Runs normal full-text search only.",
-            "Shows the remaining baseline when semantic models are not allowed.",
+            "Shows the remaining baseline when intent expansion is not configured.",
         ],
         "postgres": [
             "Target: products table.",
-            "PostgreSQL core has no built-in embedding model.",
+            "PostgreSQL core has no built-in synonym/embedding generator.",
             "Runs products.search_vector full-text search.",
-            "No vector extension is used because no embedding source is allowed.",
+            "No vector extension or synonym dictionary is used here.",
         ],
     },
     "scenario-3-analytics-aggregation": {
@@ -131,7 +131,6 @@ def format_price(value: Any) -> str:
 
 def render_product_hit(hit: dict[str, Any]) -> None:
     title = first_text(hit, ["title"], ["title"]) or hit.get("product_id", "Untitled product")
-    semantic = first_text(hit, ["semantic_text"], [])
     review = first_text(hit, ["review_text"], ["review_text"])
     description = first_text(hit, ["description"], ["description"])
 

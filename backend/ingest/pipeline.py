@@ -30,11 +30,6 @@ def format_limit(limit: int | None) -> str:
     return "all" if limit is None else str(limit)
 
 
-def semantic_text(product: dict[str, Any]) -> str:
-    return " ".join(
-        str(product.get(field) or "")
-        for field in ["title", "brand", "category", "features", "description", "review_text"]
-    )
 
 
 def load_products_with_tracking(path: Path, limit: int | None) -> list[dict[str, Any]]:
@@ -135,7 +130,6 @@ def enrich_products(
         merged["average_rating"] = merged.get("average_rating", merged.get("rating", 0))
         merged["rating_number"] = merged.get("rating_number", merged.get("review_count", 0))
         merged["title_suggest"] = merged.get("title", "")
-        merged["semantic_text"] = semantic_text(merged)
         enriched.append(merged)
     return enriched
 

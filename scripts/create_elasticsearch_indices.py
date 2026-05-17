@@ -1,15 +1,8 @@
 from __future__ import annotations
 
-import os
-
 from elasticsearch import Elasticsearch
 
 from backend.config import settings
-
-
-SEMANTIC_TEXT_MAPPING = {"type": "semantic_text"}
-if os.getenv("ELASTIC_SEMANTIC_INFERENCE_ID"):
-    SEMANTIC_TEXT_MAPPING["inference_id"] = os.environ["ELASTIC_SEMANTIC_INFERENCE_ID"]
 
 
 PRODUCT_MAPPING = {
@@ -50,7 +43,6 @@ PRODUCT_MAPPING = {
             "features": {"type": "text", "analyzer": "product_index", "search_analyzer": "product_search"},
             "description": {"type": "text", "analyzer": "product_index", "search_analyzer": "product_search"},
             "review_text": {"type": "text", "analyzer": "product_index", "search_analyzer": "product_search"},
-            "semantic_text": SEMANTIC_TEXT_MAPPING,
             "category": {"type": "keyword", "fields": {"text": {"type": "text"}}},
             "brand": {"type": "keyword", "fields": {"text": {"type": "text"}}},
             "price": {"type": "double"},

@@ -9,14 +9,14 @@ search use case:
 - Kibana for Elasticsearch inspection
 
 The demo is organized into three official flows: advanced keyword search,
-native semantic search, and search-driven review analytics.
+intent-aware search via synonyms, and search-driven review analytics.
 
 ## Demo Features
 
 - Full-text search across product metadata and review text
 - Product discovery with Elasticsearch `multi_match`, field boosting, and fuzziness
 - Elasticsearch search-as-you-type autocomplete over product titles
-- Elasticsearch native semantic search with `semantic_text` and Elastic inference
+- Elasticsearch synonym-aware intent search via `synonym_graph` and boosted `multi_match`
 - Review evidence search with rating filters, helpful-vote tie-breaks, and highlights
 - Filters by brand, category, price, and rating
 - Faceted search and aggregations
@@ -166,9 +166,9 @@ docker compose exec -T backend python scripts/ingest_all.py --reset \
   --postgres-chunk-size 5000
 ```
 
-Elasticsearch uses `semantic_text` for Scenario 2, so product ingest may call
-Elastic inference. Meilisearch and PostgreSQL ingest only lexical/full-text
-fields for that scenario.
+All three engines ingest only lexical/full-text fields. Scenario 2 uses
+Elasticsearch synonyms plus boosted `multi_match`; Meilisearch and PostgreSQL
+fall back to standard full-text search.
 
 By default, `prepare_data.py` balances review selection across products:
 
@@ -274,7 +274,7 @@ result area split by engine.
 | Scenario | Flow | User query | Demo goal | Main difference |
 | --- | --- | --- | --- | --- |
 | Scenario 1 | Full-text/Keyword Search | Product: `wireles noise canclling headphnes sony`; review evidence: `battery dies after a week` | Show keyword search for both typo-heavy product discovery and highlighted review evidence | Elasticsearch combines fuzzy boosted product search with review `rating <= 2`, highlighting, and helpful-vote sorting |
-| Scenario 2 | Semantic Search | `headphones for flights and office calls` | Show what remains when external models and app-generated embeddings are not allowed | Elasticsearch uses `semantic_text` with Elastic inference; Meilisearch and PostgreSQL fall back to full-text search |
+| Scenario 2 | Intent-Aware Search | `headphones for flights and office calls` | Show how each engine handles paraphrased intent queries without external embeddings | Elasticsearch combines a `synonym_graph` filter with boosted `multi_match`; Meilisearch and PostgreSQL fall back to full-text search |
 | Scenario 3 | Analytics & Aggregation | `battery problem` | Find which brands/categories have the most negative battery-problem reviews and rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
 
 Each scenario shows 3 columns:
@@ -320,42 +320,12 @@ Item metadata source fields used by this demo:
 
 The product index also stores a small aggregated `review_text` field from
 matching reviews so Scenario 1 can search product metadata plus review language.
-For Scenario 2, Elasticsearch stores combined product text in a `semantic_text`
-field. Meilisearch and PostgreSQL do not receive app-generated embeddings in
-this no-external-model setup.
-
-Set `ELASTIC_SEMANTIC_INFERENCE_ID` before creating indices if you want to bind
-the `semantic_text` field to a specific Elastic inference endpoint. If it is not
-set, Elasticsearch uses the default semantic inference endpoint configured for
-the cluster.
-
-### Deploy ELSER for semantic search
-
-`scripts/setup_elser.sh` deploys ELSER v2 onto the cluster as the inference
-endpoint named `my-elser` and writes `ELASTIC_SEMANTIC_INFERENCE_ID=my-elser`
-into `/opt/nexus/docker-elk/.env`. The script is idempotent.
-
-Prerequisite: at least one Elasticsearch node must have the `ml` role. The
-Terraform startup script assigns `data,ingest,ml` to `nexus-worker-1` by
-default.
-
-Run on the master VM:
-
-```bash
-cd /opt/nexus/docker-elk
-bash scripts/setup_elser.sh
-
-# Re-create backend so it picks up the new env var
-docker compose --env-file .env --env-file /etc/nexus-elastic.env \
-  up -d --force-recreate backend
-
-# Re-ingest only Elasticsearch (processed JSONL is reused)
-docker compose exec -T backend python scripts/ingest_all.py --reset --engine elasticsearch
-```
-
-Tunables via env vars: `INFERENCE_ID`, `MODEL_ID`, `MIN_ALLOCATIONS`,
-`MAX_ALLOCATIONS`, `NUM_THREADS`, `WAIT_TIMEOUT_SECONDS`, `ES_URL`,
-`ENV_FILE`. Use `MODEL_ID=.elser_model_2` for non-x86_64 hosts.
+Scenario 2 (intent-aware search) uses curated synonyms instead of an embedding
+model. The product index ships with a `synonym_graph` filter on the
+`product_search` analyzer (see `scripts/create_elasticsearch_indices.py`),
+covering common Amazon Electronics intent phrases (ANC, wireless, headphones,
+cheap/budget, etc.). Add or edit synonyms in that file and reset the indices
+to apply.
 
 ## Main Endpoints
 
@@ -389,5 +359,5 @@ curl "http://localhost:8000/search/elasticsearch/semantic?q=headphones%20for%20f
 ```
 
 `as-you-type` uses an Elasticsearch `search_as_you_type` field on product
-titles. Semantic search uses Elasticsearch `semantic_text`; re-run ingest with
-`--reset` after mapping changes.
+titles. Intent-aware search uses synonym-aware `multi_match`; re-run ingest
+with `--reset` after editing synonyms or mappings.
