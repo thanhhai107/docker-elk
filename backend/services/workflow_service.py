@@ -243,6 +243,7 @@ class WorkflowService:
 
     def _es_product_keyword_search(self, query: str, limit: int) -> dict[str, Any]:
         body = {
+            "track_total_hits": True,
             "size": limit,
             "query": {
                 "bool": {
@@ -284,7 +285,8 @@ class WorkflowService:
         response = self.meili.index(PRODUCT_INDEX).search(
             query,
             {
-                "limit": limit,
+                "hitsPerPage": limit,
+                "page": 1,
                 "filter": "average_rating >= 0",
                 "attributesToHighlight": ["title", "features", "description", "review_text"],
                 "showRankingScore": True,
@@ -331,6 +333,7 @@ class WorkflowService:
     def _es_review_evidence_search(self, query: str, limit: int) -> dict[str, Any]:
         rating_filter, sentiment = self._review_rating_filter(query)
         body = {
+            "track_total_hits": True,
             "size": limit,
             "query": {
                 "bool": {
@@ -374,7 +377,8 @@ class WorkflowService:
         response = self.meili.index(REVIEW_INDEX).search(
             query,
             {
-                "limit": limit,
+                "hitsPerPage": limit,
+                "page": 1,
                 "filter": filter_expr,
                 "sort": ["helpful_vote:desc"],
                 "attributesToHighlight": ["title", "text"],
@@ -427,6 +431,7 @@ class WorkflowService:
 
     def _es_scenario_2_semantic_search(self, query: str, limit: int) -> dict[str, Any]:
         body = {
+            "track_total_hits": True,
             "size": limit,
             "query": {
                 "multi_match": {
@@ -468,7 +473,8 @@ class WorkflowService:
         response = self.meili.index(PRODUCT_INDEX).search(
             query,
             {
-                "limit": limit,
+                "hitsPerPage": limit,
+                "page": 1,
                 "attributesToHighlight": ["title", "features", "description", "review_text"],
                 "showRankingScore": True,
             },
@@ -525,6 +531,7 @@ class WorkflowService:
 
     def _es_scenario_3_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
         body = {
+            "track_total_hits": True,
             "size": 0,
             "query": {
                 "bool": {
@@ -553,10 +560,10 @@ class WorkflowService:
             },
         }
         response = self.es.search(index=REVIEW_INDEX, body=body)
-        return self._engine_result(
+        result = self._engine_result(
             "elasticsearch",
             response,
-            "One request searches battery-problem reviews, filters negative ratings, and aggregates brand/category/rating metrics.",
+            "One request searches matching reviews, filters negative ratings, and aggregates brand/category/rating metrics.",
             number_of_requests=1,
             has_aggregation=True,
             has_custom_ranking=False,
@@ -564,23 +571,31 @@ class WorkflowService:
             score=5,
             document_type="analytics",
         )
+        result["aggregations"] = self._normalize_es_analytics(
+            response.get("aggregations", {}),
+            response.get("hits", {}).get("total", {}).get("value", 0),
+        )
+        return result
 
     def _meili_scenario_3_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
         response, docs = self._meili_matching_reviews(query)
-        analytics = self._aggregate_review_docs(docs)
-        analytics["facets"] = response.get("facetDistribution", {})
+        analytics = self._build_meili_analytics(response, docs)
         return {
             "engine": "meilisearch",
             "document_type": "analytics",
             "number_of_requests": 1,
-            "total": response.get("estimatedTotalHits", len(docs)),
+            "total": self._meili_total(response, len(docs)),
             "hits": [],
             "aggregations": analytics,
             "has_highlight": False,
             "has_aggregation": True,
             "has_custom_ranking": False,
             "backend_complexity": "High",
-            "note": "Meilisearch returns facet counts for matched reviews, while avg rating and helpful-vote metrics are computed in the app.",
+            "note": (
+                "Meilisearch facetDistribution gives counts natively. Per-brand avg_rating and helpful_vote, "
+                "plus the overall summary, are computed app-side from a sample because Meilisearch has no metric "
+                "aggregation; values may be approximate when matches exceed the sample size."
+            ),
             "scorecard": {"overall": 2},
         }
 
@@ -662,11 +677,62 @@ class WorkflowService:
             "scorecard": {"overall": 4},
         }
 
+    def _build_meili_analytics(self, response: dict[str, Any], docs: list[dict[str, Any]]) -> dict[str, Any]:
+        facets = response.get("facetDistribution", {}) or {}
+        brand_counts = facets.get("brand", {}) or {}
+        category_counts = facets.get("category", {}) or {}
+        rating_counts = facets.get("rating", {}) or {}
+
+        brand_ratings: dict[str, list[float]] = defaultdict(list)
+        brand_helpful: Counter[str] = Counter()
+        for doc in docs:
+            brand = doc.get("brand") or "Unknown"
+            brand_ratings[brand].append(float(doc.get("rating") or 0))
+            brand_helpful[brand] += int(doc.get("helpful_vote") or 0)
+
+        brands = []
+        for brand, count in sorted(brand_counts.items(), key=lambda item: -item[1])[:10]:
+            ratings = brand_ratings.get(brand, [])
+            brands.append({
+                "value": brand,
+                "negative_review_count": int(count),
+                "avg_rating": round(sum(ratings) / len(ratings), 2) if ratings else None,
+                "total_helpful_votes": int(brand_helpful.get(brand, 0)),
+            })
+
+        categories = [
+            {"value": value, "negative_review_count": int(count)}
+            for value, count in sorted(category_counts.items(), key=lambda item: -item[1])[:10]
+        ]
+        rating_distribution = [
+            {"value": value, "count": int(count)}
+            for value, count in sorted(rating_counts.items(), key=lambda item: float(item[0]))
+        ]
+
+        sample_ratings = [float(doc.get("rating") or 0) for doc in docs]
+        avg_rating = round(sum(sample_ratings) / len(sample_ratings), 2) if sample_ratings else None
+
+        return {
+            "brands": brands,
+            "categories": categories,
+            "rating_distribution": rating_distribution,
+            "summary": {
+                "matched_negative_reviews": self._meili_total(response, len(docs)),
+                "avg_rating": avg_rating,
+            },
+        }
+
     def _review_rating_filter(self, query: str) -> tuple[dict[str, int], str]:
         is_positive = any(term in query.lower() for term in POSITIVE_REVIEW_TERMS)
         if is_positive:
             return {"gte": 4}, "positive"
         return {"lte": 2}, "negative"
+
+    def _meili_total(self, response: dict[str, Any], hits_len: int) -> int:
+        total = response.get("totalHits")
+        if total is None:
+            total = response.get("estimatedTotalHits", hits_len)
+        return int(total or 0)
 
     def _meili_review_filter(self, query: str) -> tuple[str, str]:
         rating_filter, sentiment = self._review_rating_filter(query)
@@ -699,7 +765,8 @@ class WorkflowService:
         response = index.search(
             query,
             {
-                "limit": 1000,
+                "hitsPerPage": 1000,
+                "page": 1,
                 "filter": "rating <= 2",
                 "facets": ["brand", "category", "rating"],
             },
@@ -740,6 +807,34 @@ class WorkflowService:
             "summary": {
                 "matched_negative_reviews": len(docs),
                 "avg_rating": round(sum(float(doc.get("rating") or 0) for doc in docs) / len(docs), 2) if docs else 0,
+            },
+        }
+
+    def _normalize_es_analytics(self, aggs: dict[str, Any], total: int) -> dict[str, Any]:
+        brands = []
+        for bucket in aggs.get("brands", {}).get("buckets", []):
+            brands.append({
+                "value": bucket.get("key"),
+                "negative_review_count": bucket.get("doc_count", 0),
+                "avg_rating": round((bucket.get("avg_rating") or {}).get("value") or 0, 2),
+                "total_helpful_votes": int((bucket.get("total_helpful_votes") or {}).get("value") or 0),
+            })
+        categories = [
+            {"value": bucket.get("key"), "negative_review_count": bucket.get("doc_count", 0)}
+            for bucket in aggs.get("categories", {}).get("buckets", [])
+        ]
+        rating_distribution = [
+            {"value": bucket.get("key"), "count": bucket.get("doc_count", 0)}
+            for bucket in aggs.get("rating_distribution", {}).get("buckets", [])
+        ]
+        avg_rating = round((aggs.get("avg_rating") or {}).get("value") or 0, 2)
+        return {
+            "brands": brands,
+            "categories": categories,
+            "rating_distribution": rating_distribution,
+            "summary": {
+                "matched_negative_reviews": int(total or 0),
+                "avg_rating": avg_rating,
             },
         }
 
@@ -795,9 +890,12 @@ class WorkflowService:
             "engine": "meilisearch",
             "document_type": document_type,
             "number_of_requests": number_of_requests,
-            "total": response.get("estimatedTotalHits", len(hits)),
+            "total": self._meili_total(response, len(hits)),
             "hits": hits,
-            "aggregations": {"facets": response.get("facetDistribution", {})},
+            "aggregations": (
+                {"facets": response.get("facetDistribution", {})}
+                if has_aggregation else {}
+            ),
             "has_highlight": True,
             "has_aggregation": has_aggregation,
             "has_custom_ranking": has_custom_ranking,
