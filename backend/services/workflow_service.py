@@ -287,7 +287,6 @@ class WorkflowService:
             {
                 "hitsPerPage": limit,
                 "page": 1,
-                "filter": "average_rating >= 0",
                 "attributesToHighlight": ["title", "features", "description", "review_text"],
                 "showRankingScore": True,
             },
@@ -530,6 +529,7 @@ class WorkflowService:
         return result
 
     def _es_scenario_3_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
+        rating_filter, _sentiment = self._review_rating_filter(query)
         body = {
             "track_total_hits": True,
             "size": 0,
@@ -543,7 +543,7 @@ class WorkflowService:
                             }
                         }
                     ],
-                    "filter": [{"range": {"rating": {"lte": 2}}}],
+                    "filter": [{"range": {"rating": rating_filter}}],
                 }
             },
             "aggs": {
@@ -600,9 +600,11 @@ class WorkflowService:
         }
 
     def _pg_scenario_3_analytics_aggregation(self, query: str, limit: int) -> dict[str, Any]:
+        operator, threshold, _sentiment = self._pg_review_filter(query)
+        rating_clause = f"reviews.rating {operator} %s"
         with psycopg.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
             brand_metrics = conn.execute(
-                """
+                f"""
                 WITH q AS (SELECT websearch_to_tsquery('english', %s) AS tsq)
                 SELECT products.brand AS value,
                        count(*) AS negative_review_count,
@@ -611,51 +613,51 @@ class WorkflowService:
                 FROM reviews
                 JOIN products ON products.product_id = reviews.product_id, q
                 WHERE review_vector @@ q.tsq
-                  AND reviews.rating <= 2
+                  AND {rating_clause}
                 GROUP BY products.brand
                 ORDER BY negative_review_count DESC, avg_rating ASC
                 LIMIT 10
                 """,
-                [query],
+                [query, threshold],
             ).fetchall()
             categories = conn.execute(
-                """
+                f"""
                 WITH q AS (SELECT websearch_to_tsquery('english', %s) AS tsq)
                 SELECT products.category AS value, count(*) AS negative_review_count
                 FROM reviews
                 JOIN products ON products.product_id = reviews.product_id, q
                 WHERE review_vector @@ q.tsq
-                  AND reviews.rating <= 2
+                  AND {rating_clause}
                 GROUP BY products.category
                 ORDER BY negative_review_count DESC
                 LIMIT 10
                 """,
-                [query],
+                [query, threshold],
             ).fetchall()
             rating_distribution = conn.execute(
-                """
+                f"""
                 WITH q AS (SELECT websearch_to_tsquery('english', %s) AS tsq)
                 SELECT reviews.rating AS value, count(*) AS count
                 FROM reviews
                 JOIN products ON products.product_id = reviews.product_id, q
                 WHERE review_vector @@ q.tsq
-                  AND reviews.rating <= 2
+                  AND {rating_clause}
                 GROUP BY reviews.rating
                 ORDER BY reviews.rating
                 """,
-                [query],
+                [query, threshold],
             ).fetchall()
             summary = conn.execute(
-                """
+                f"""
                 WITH q AS (SELECT websearch_to_tsquery('english', %s) AS tsq)
                 SELECT count(*) AS matched_negative_reviews,
                        round(avg(reviews.rating)::numeric, 2) AS avg_rating
                 FROM reviews
                 JOIN products ON products.product_id = reviews.product_id, q
                 WHERE review_vector @@ q.tsq
-                  AND reviews.rating <= 2
+                  AND {rating_clause}
                 """,
-                [query],
+                [query, threshold],
             ).fetchone()
         return {
             "engine": "postgres",
@@ -761,13 +763,14 @@ class WorkflowService:
         return docs
 
     def _meili_matching_reviews(self, query: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        filter_expr, _sentiment = self._meili_review_filter(query)
         index = self.meili.index(REVIEW_INDEX)
         response = index.search(
             query,
             {
                 "hitsPerPage": 1000,
                 "page": 1,
-                "filter": "rating <= 2",
+                "filter": filter_expr,
                 "facets": ["brand", "category", "rating"],
             },
         )
