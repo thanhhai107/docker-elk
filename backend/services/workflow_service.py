@@ -127,7 +127,9 @@ class WorkflowService:
         if scenario_id not in SCENARIOS:
             raise KeyError(scenario_id)
         scenario = SCENARIOS[scenario_id]
-        selected_query = query or scenario["default_query"]
+        selected_query = (query or "").strip()
+        if not selected_query:
+            raise ValueError("Query is required")
         suffix = scenario_id.replace("-", "_")
         runners: list[tuple[str, Callable[[str, int], dict[str, Any]]]] = [
             ("elasticsearch", getattr(self, f"_es_{suffix}")),
@@ -167,7 +169,7 @@ class WorkflowService:
         if scenario_id == "scenario-1-full-text-keyword-search":
             return {
                 "product_discovery": selected_query,
-                "review_evidence": SCENARIOS[scenario_id]["secondary_query"],
+                "review_evidence": selected_query,
             }
         return {"query": selected_query}
 
@@ -213,7 +215,7 @@ class WorkflowService:
         }
 
     def _es_scenario_1_full_text_keyword_search(self, query: str, limit: int) -> dict[str, Any]:
-        review_query = SCENARIOS["scenario-1-full-text-keyword-search"]["secondary_query"]
+        review_query = query
         product_result = self._es_product_keyword_search(query, limit)
         review_result = self._es_review_evidence_search(review_query, limit)
         return self._mixed_result(
@@ -230,7 +232,7 @@ class WorkflowService:
         )
 
     def _meili_scenario_1_full_text_keyword_search(self, query: str, limit: int) -> dict[str, Any]:
-        review_query = SCENARIOS["scenario-1-full-text-keyword-search"]["secondary_query"]
+        review_query = query
         product_result = self._meili_product_keyword_search(query, limit)
         review_result = self._meili_review_evidence_search(review_query, limit)
         return self._mixed_result(
@@ -247,7 +249,7 @@ class WorkflowService:
         )
 
     def _pg_scenario_1_full_text_keyword_search(self, query: str, limit: int) -> dict[str, Any]:
-        review_query = SCENARIOS["scenario-1-full-text-keyword-search"]["secondary_query"]
+        review_query = query
         product_result = self._pg_product_keyword_search(query, limit)
         review_result = self._pg_review_evidence_search(review_query, limit)
         return self._mixed_result(

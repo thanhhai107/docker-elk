@@ -388,13 +388,24 @@ if isinstance(selected_suggestion, str) and selected_suggestion and selected_sug
     auto_run = True
 
 if submitted or auto_run:
-    cleaned_query = (st.session_state.selected_query or "").strip()
-    st.session_state.search_request = {
-        "scenario_id": scenario_labels[st.session_state.scenario_label],
-        "query": cleaned_query or None,
-        "limit": int(st.session_state.limit_value),
-        "engine": service_labels[st.session_state.service_label],
-    }
+    typed_query = ""
+    box_value = st.session_state.get("query_box")
+    if isinstance(box_value, dict):
+        typed_query = (box_value.get("search") or "").strip()
+    if not typed_query and isinstance(selected_suggestion, str):
+        typed_query = selected_suggestion.strip()
+    if not typed_query:
+        typed_query = (st.session_state.selected_query or "").strip()
+    if not typed_query:
+        st.warning("Please enter a query before searching.")
+    else:
+        st.session_state.selected_query = typed_query
+        st.session_state.search_request = {
+            "scenario_id": scenario_labels[st.session_state.scenario_label],
+            "query": typed_query,
+            "limit": int(st.session_state.limit_value),
+            "engine": service_labels[st.session_state.service_label],
+        }
 
 if st.session_state.search_request:
     request = st.session_state.search_request

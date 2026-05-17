@@ -95,3 +95,5 @@ def run_scenario(
         return WorkflowService().run(scenario_id, q, limit, engine)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown scenario: {scenario_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
