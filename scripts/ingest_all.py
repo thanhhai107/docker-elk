@@ -125,6 +125,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--reset", action="store_true")
     parser.add_argument("--skip-embeddings", action="store_true", help="Skip Vertex AI embedding generation for Elasticsearch products.")
+    parser.add_argument("--limit", type=int, default=0, help="Limit the number of products/reviews to ingest (for testing). 0 means no limit.")
     return parser.parse_args()
 
 
@@ -435,6 +436,11 @@ def main() -> int:
     log(f"Meilisearch chunk_size={args.meili_chunk_size}")
     log(f"PostgreSQL chunk_size={args.postgres_chunk_size}")
 
+    if args.limit > 0:
+        log(f"LIMITING ingest to {args.limit} items (--limit {args.limit})")
+        products = products[:args.limit]
+        reviews = reviews[:args.limit]
+        
     if args.engine in {"all", "postgres"}:
         log("Ingesting PostgreSQL...")
         ingest_postgres(products, reviews, args.reset, args.postgres_chunk_size)
