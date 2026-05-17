@@ -6,6 +6,7 @@ from typing import Any
 
 import requests
 import streamlit as st
+from streamlit_searchbox import st_searchbox
 
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
@@ -355,18 +356,22 @@ service_labels = {label: engine for engine, label in SERVICE_LABELS.items()}
 if "search_request" not in st.session_state:
     st.session_state.search_request = None
 
-if "query_value" not in st.session_state:
-    st.session_state.query_value = ""
-if "trigger_search" not in st.session_state:
-    st.session_state.trigger_search = False
+if "selected_query" not in st.session_state:
+    st.session_state.selected_query = ""
+
+def suggestion_search(prefix: str) -> list[tuple[str, str]]:
+    return [(title, title) for title in fetch_suggestions(prefix, limit=8)]
 
 st.markdown("## 1. Input & Search Options")
 search_col, scenario_col, service_col, limit_col, button_col = st.columns([4.4, 2.4, 1.9, 1.1, 1])
 with search_col:
-    query = st.text_input(
-        "Search query",
-        key="query_value",
-        placeholder="Type your product need, review problem, or analytics keyword",
+    selected_suggestion = st_searchbox(
+        suggestion_search,
+        placeholder="Type product, review problem, or analytics keyword",
+        label="Search query",
+        key="query_box",
+        clear_on_submit=False,
+        edit_after_submit="current",
     )
 with scenario_col:
     selected_label = st.selectbox("Scenario", list(scenario_labels), key="scenario_label")
@@ -377,20 +382,13 @@ with limit_col:
 with button_col:
     submitted = st.button("Search", use_container_width=True, key="search_button")
 
-suggestions = fetch_suggestions(query.strip()) if query else []
-if suggestions:
-    st.caption("Suggestions (search-as-you-type)")
-    suggestion_cols = st.columns(len(suggestions))
-    for index, (sug_col, suggestion) in enumerate(zip(suggestion_cols, suggestions)):
-        with sug_col:
-            if st.button(suggestion, key=f"suggestion_{index}", use_container_width=True):
-                st.session_state.query_value = suggestion
-                st.session_state.trigger_search = True
-                st.rerun()
+auto_run = False
+if isinstance(selected_suggestion, str) and selected_suggestion and selected_suggestion != st.session_state.selected_query:
+    st.session_state.selected_query = selected_suggestion
+    auto_run = True
 
-if submitted or st.session_state.trigger_search:
-    st.session_state.trigger_search = False
-    cleaned_query = st.session_state.query_value.strip()
+if submitted or auto_run:
+    cleaned_query = (st.session_state.selected_query or "").strip()
     st.session_state.search_request = {
         "scenario_id": scenario_labels[st.session_state.scenario_label],
         "query": cleaned_query or None,
