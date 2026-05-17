@@ -21,33 +21,54 @@ SERVICE_LABELS = {
     **ENGINE_LABELS,
 }
 SCENARIOS = [
-    ("scenario-1-full-text-keyword-search", "Scenario 1: Full-text/Keyword Search"),
-    ("scenario-2-semantic-search", "Scenario 2: Intent-Aware Search"),
-    ("scenario-3-analytics-aggregation", "Scenario 3: Analytics & Aggregation"),
+    ("scenario-1-product-search", "Scenario 1: Product Search"),
+    ("scenario-2-review-search", "Scenario 2: Review Search"),
+    ("scenario-3-intent-aware-search", "Scenario 3: Intent-Aware Search"),
+    ("scenario-4-analytics-aggregation", "Scenario 4: Analytics & Aggregation"),
 ]
 
 SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
-    "scenario-1-full-text-keyword-search": {
+    "scenario-1-product-search": {
         "elasticsearch": [
-            "Targets: product index and review index.",
-            "Runs boosted fuzzy multi_match over title, brand, category, features, description, and review_text.",
-            "Uses fuzziness for wireles, canclling, and headphnes.",
-            "Runs a second review evidence query with rating <= 2, highlights, and helpful_vote tie-breaks.",
+            "Target: product index.",
+            "Boosted fuzzy multi_match over title, brand, category, features, description, and review_text.",
+            "Uses fuzziness AUTO so typos still match.",
+            "Returns highlights and field-level ranking control.",
         ],
         "meilisearch": [
-            "Targets: product index and review index.",
-            "Runs Meilisearch keyword search over title, brand, category, features, description, and review_text.",
-            "Uses Meilisearch built-in typo tolerance and ranking rules.",
-            "Runs review filtering/highlighting, with less field-level ranking control than Elasticsearch.",
+            "Target: product index.",
+            "Runs default keyword search with built-in typo tolerance.",
+            "Returns highlights with simpler ranking knobs.",
+            "Less per-field boosting than Elasticsearch.",
         ],
         "postgres": [
-            "Targets: products table and reviews table.",
+            "Target: products table.",
             "Converts the query with websearch_to_tsquery.",
             "Searches products.search_vector with default PostgreSQL FTS.",
-            "Uses ts_headline for review evidence, but typo-heavy product terms can miss without pg_trgm.",
+            "Typo-heavy queries can miss because pg_trgm is not enabled here.",
         ],
     },
-    "scenario-2-semantic-search": {
+    "scenario-2-review-search": {
+        "elasticsearch": [
+            "Target: review index.",
+            "multi_match over title and text with fuzziness AUTO.",
+            "Filters reviews by rating and sorts by helpful_vote desc.",
+            "Returns highlighted review snippets in one request.",
+        ],
+        "meilisearch": [
+            "Target: review index.",
+            "Searches review title/text with typo tolerance.",
+            "Filters by rating, sorts by helpful_vote desc.",
+            "Returns highlights with simpler ranking knobs than Elasticsearch.",
+        ],
+        "postgres": [
+            "Target: reviews table joined with products.",
+            "Uses review_vector + ts_headline for snippets.",
+            "Filters by rating, sorts by score then helpful_vote.",
+            "Manual SQL for filtering, ranking, and snippet generation.",
+        ],
+    },
+    "scenario-3-intent-aware-search": {
         "elasticsearch": [
             "Target: product index.",
             "Expands the query with the synonym_graph filter (anc/headphones/wireless/cheap).",
@@ -67,16 +88,16 @@ SERVICE_ACTIVITIES: dict[str, dict[str, list[str]]] = {
             "No vector extension or synonym dictionary is used here.",
         ],
     },
-    "scenario-3-analytics-aggregation": {
+    "scenario-4-analytics-aggregation": {
         "elasticsearch": [
             "Target: review index.",
             "Runs size=0 analytics queries instead of returning product hits.",
-            "Searches battery problem reviews and filters rating <= 2.",
+            "Searches matching reviews and filters rating <= 2.",
             "Aggregates by brand, category, rating distribution, average rating, and helpful votes.",
         ],
         "meilisearch": [
             "Target: review index.",
-            "Searches battery problem reviews with rating <= 2.",
+            "Searches matching reviews with rating <= 2.",
             "Returns simple facets for brand/category/rating.",
             "Computes average rating and helpful-vote metrics in the application layer.",
         ],

@@ -166,7 +166,7 @@ docker compose exec -T backend python scripts/ingest_all.py --reset \
   --postgres-chunk-size 5000
 ```
 
-All three engines ingest only lexical/full-text fields. Scenario 2 uses
+All three engines ingest only lexical/full-text fields. Scenario 3 uses
 Elasticsearch synonyms plus boosted `multi_match`; Meilisearch and PostgreSQL
 fall back to standard full-text search.
 
@@ -273,9 +273,10 @@ result area split by engine.
 
 | Scenario | Flow | User query | Demo goal | Main difference |
 | --- | --- | --- | --- | --- |
-| Scenario 1 | Full-text/Keyword Search | Product: `wireles noise canclling headphnes sony`; review evidence: `battery dies after a week` | Show keyword search for both typo-heavy product discovery and highlighted review evidence | Elasticsearch combines fuzzy boosted product search with review `rating <= 2`, highlighting, and helpful-vote sorting |
-| Scenario 2 | Intent-Aware Search | `headphones for flights and office calls` | Show how each engine handles paraphrased intent queries without external embeddings | Elasticsearch combines a `synonym_graph` filter with boosted `multi_match`; Meilisearch and PostgreSQL fall back to full-text search |
-| Scenario 3 | Analytics & Aggregation | `battery problem` | Find which brands/categories have the most negative battery-problem reviews and rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
+| Scenario 1 | Product Search | `wireles noise canclling headphnes sony` | Find products by typo-heavy keywords across product metadata | Elasticsearch boosts fuzzy `multi_match` per field; Meilisearch leans on built-in typo tolerance; PostgreSQL FTS misses many typos without `pg_trgm` |
+| Scenario 2 | Review Search | `battery dies after a week` | Surface review evidence that matches the user query | Elasticsearch combines text match, rating filter, helpful-vote sort, and highlighted snippets in one request |
+| Scenario 3 | Intent-Aware Search | `headphones for flights and office calls` | Match paraphrased intent queries without external embeddings | Elasticsearch uses a `synonym_graph` filter with boosted `multi_match`; Meilisearch and PostgreSQL fall back to full-text search |
+| Scenario 4 | Analytics & Aggregation | `battery problem` | Find which brands/categories receive the most matching complaints and the rating distribution | Elasticsearch combines full-text search, filters, facets, and aggregations in one request |
 
 Each scenario shows 3 columns:
 
@@ -319,8 +320,8 @@ Item metadata source fields used by this demo:
 | `categories` / `main_category` | Normalized to `category`. |
 
 The product index also stores a small aggregated `review_text` field from
-matching reviews so Scenario 1 can search product metadata plus review language.
-Scenario 2 (intent-aware search) uses curated synonyms instead of an embedding
+matching reviews so Scenario 1 (product search) can search product metadata plus review language.
+Scenario 3 (intent-aware search) uses curated synonyms instead of an embedding
 model. The product index ships with a `synonym_graph` filter on the
 `product_search` analyzer (see `scripts/create_elasticsearch_indices.py`),
 covering common Amazon Electronics intent phrases (ANC, wireless, headphones,
@@ -338,9 +339,10 @@ curl "http://localhost:8000/scenarios"
 Run a single scenario:
 
 ```bash
-curl "http://localhost:8000/scenarios/scenario-1-full-text-keyword-search?q=wireles%20noise%20canclling%20headphnes%20sony"
-curl "http://localhost:8000/scenarios/scenario-2-semantic-search?q=headphones%20for%20flights%20and%20office%20calls"
-curl "http://localhost:8000/scenarios/scenario-3-analytics-aggregation?q=battery%20problem"
+curl "http://localhost:8000/scenarios/scenario-1-product-search?q=wireles%20noise%20canclling%20headphnes%20sony"
+curl "http://localhost:8000/scenarios/scenario-2-review-search?q=battery%20dies%20after%20a%20week"
+curl "http://localhost:8000/scenarios/scenario-3-intent-aware-search?q=headphones%20for%20flights%20and%20office%20calls"
+curl "http://localhost:8000/scenarios/scenario-4-analytics-aggregation?q=battery%20problem"
 ```
 
 Basic search endpoints:

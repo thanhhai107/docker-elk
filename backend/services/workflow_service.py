@@ -49,28 +49,39 @@ QUERY_OPTIONS = (
 )
 
 SCENARIOS: dict[str, dict[str, Any]] = {
-    "scenario-1-full-text-keyword-search": {
-        "title": "Scenario 1: Full-text/Keyword Search",
-        "flow_name": "Full-text/Keyword Search",
-        "default_query": ADVANCED_KEYWORD_PRODUCT_QUERIES[0],
-        "secondary_query": REVIEW_EVIDENCE_QUERIES[0],
-        "user_action": "Run typo-heavy product discovery, then retrieve review evidence for a concrete complaint.",
-        "demo_goal": "Show keyword search under two practical conditions: typo-tolerant product discovery and highlighted review evidence.",
+    "scenario-1-product-search": {
+        "title": "Scenario 1: Product Search",
+        "flow_name": "Product Search",
+        "user_action": "Type a product need (with typos OK) to discover matching products.",
+        "demo_goal": "Find the right product across title, brand, category, features, description, and aggregated review text, even with typos.",
         "difference": (
-            "Elasticsearch combines fuzzy multi-field product ranking with highlighted review evidence, "
-            "rating filters, and helpful-vote sorting."
+            "Elasticsearch ranks fuzzy multi_match across boosted product fields. "
+            "Meilisearch leans on built-in typo tolerance; PostgreSQL FTS struggles on typos without pg_trgm."
         ),
         "summary": (
-            "Full-text/keyword workflow that combines product typo search and review evidence search. "
-            "Elasticsearch demonstrates fuzzy boosted product search plus filtered/highlighted review snippets."
+            "Product discovery workflow targeting the products index/table. "
+            "Elasticsearch shows boosted fields + fuzziness; the others use their default keyword search."
         ),
     },
-    "scenario-2-semantic-search": {
-        "title": "Scenario 2: Intent-Aware Search",
+    "scenario-2-review-search": {
+        "title": "Scenario 2: Review Search",
+        "flow_name": "Review Search",
+        "user_action": "Search reviews for a complaint or question (e.g. battery problem, charger broken).",
+        "demo_goal": "Surface review snippets that match the user query, ranked by helpful-vote tie-break with highlighted evidence.",
+        "difference": (
+            "Elasticsearch filters reviews by rating, sorts by helpful_vote, and highlights matching fragments. "
+            "Meilisearch/PostgreSQL provide similar pieces with less ranking control."
+        ),
+        "summary": (
+            "Review evidence workflow targeting the reviews index/table. "
+            "Elasticsearch combines text match, rating filter, helpful-vote sort, and snippet highlights."
+        ),
+    },
+    "scenario-3-intent-aware-search": {
+        "title": "Scenario 3: Intent-Aware Search",
         "flow_name": "Intent-Aware Search",
-        "default_query": NATIVE_SEMANTIC_QUERIES[0],
-        "user_action": "Search by intent (paraphrased product use) without external embedding providers.",
-        "demo_goal": "Show how each engine can still match intent-style queries when external models and user-provided embeddings are not allowed.",
+        "user_action": "Search by paraphrased intent (e.g. headphones for flights and office calls).",
+        "demo_goal": "Match intent-style queries without external embedding providers using curated synonyms.",
         "difference": (
             "Elasticsearch uses synonym-aware multi_match (synonym_graph expands ANC/wireless/headphones/etc.). "
             "Meilisearch and PostgreSQL fall back to lexical full-text search."
@@ -80,18 +91,17 @@ SCENARIOS: dict[str, dict[str, Any]] = {
             "Meilisearch and PostgreSQL demonstrate what remains without curated synonyms: standard full-text retrieval."
         ),
     },
-    "scenario-3-analytics-aggregation": {
-        "title": "Scenario 3: Analytics & Aggregation",
+    "scenario-4-analytics-aggregation": {
+        "title": "Scenario 4: Analytics & Aggregation",
         "flow_name": "Analytics & Aggregation",
-        "default_query": REVIEW_ANALYTICS_QUERIES[0],
-        "user_action": "Search review text for battery problem and summarize the matched negative reviews.",
-        "demo_goal": "Answer which brands/categories receive the most battery-problem complaints and how ratings are distributed.",
+        "user_action": "Type a review topic (e.g. battery problem) to summarize complaints by brand/category/rating.",
+        "demo_goal": "Answer which brands/categories receive the most matching complaints and how ratings are distributed.",
         "difference": (
             "Elasticsearch combines search plus aggregation/facets in one engine; "
             "Meilisearch/PostgreSQL need app-side or SQL work."
         ),
         "summary": (
-            "Review analytics workflow for turning a battery-problem topic into brand/category/rating insights. "
+            "Review analytics workflow for turning a topic into brand/category/rating insights. "
             "Elasticsearch combines full-text search, filters, aggregation, and facets inside one engine."
         ),
     },
@@ -130,11 +140,33 @@ class WorkflowService:
         selected_query = (query or "").strip()
         if not selected_query:
             raise ValueError("Query is required")
-        suffix = scenario_id.replace("-", "_")
+        runner_map: dict[str, dict[str, Callable[[str, int], dict[str, Any]]]] = {
+            "scenario-1-product-search": {
+                "elasticsearch": self._es_product_keyword_search,
+                "meilisearch": self._meili_product_keyword_search,
+                "postgres": self._pg_product_keyword_search,
+            },
+            "scenario-2-review-search": {
+                "elasticsearch": self._es_review_evidence_search,
+                "meilisearch": self._meili_review_evidence_search,
+                "postgres": self._pg_review_evidence_search,
+            },
+            "scenario-3-intent-aware-search": {
+                "elasticsearch": self._es_scenario_2_semantic_search,
+                "meilisearch": self._meili_scenario_2_semantic_search,
+                "postgres": self._pg_scenario_2_semantic_search,
+            },
+            "scenario-4-analytics-aggregation": {
+                "elasticsearch": self._es_scenario_3_analytics_aggregation,
+                "meilisearch": self._meili_scenario_3_analytics_aggregation,
+                "postgres": self._pg_scenario_3_analytics_aggregation,
+            },
+        }
+        scenario_runners = runner_map[scenario_id]
         runners: list[tuple[str, Callable[[str, int], dict[str, Any]]]] = [
-            ("elasticsearch", getattr(self, f"_es_{suffix}")),
-            ("meilisearch", getattr(self, f"_meili_{suffix}")),
-            ("postgres", getattr(self, f"_pg_{suffix}")),
+            ("elasticsearch", scenario_runners["elasticsearch"]),
+            ("meilisearch", scenario_runners["meilisearch"]),
+            ("postgres", scenario_runners["postgres"]),
         ]
         selected_engine = engine
         if selected_engine != "all":
@@ -166,11 +198,6 @@ class WorkflowService:
         }
 
     def _scenario_queries(self, scenario_id: str, selected_query: str) -> dict[str, str]:
-        if scenario_id == "scenario-1-full-text-keyword-search":
-            return {
-                "product_discovery": selected_query,
-                "review_evidence": selected_query,
-            }
         return {"query": selected_query}
 
     def _result_section(self, title: str, query: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -213,57 +240,6 @@ class WorkflowService:
             "note": note,
             "scorecard": {"overall": score},
         }
-
-    def _es_scenario_1_full_text_keyword_search(self, query: str, limit: int) -> dict[str, Any]:
-        review_query = query
-        product_result = self._es_product_keyword_search(query, limit)
-        review_result = self._es_review_evidence_search(review_query, limit)
-        return self._mixed_result(
-            "elasticsearch",
-            "Two Elasticsearch keyword requests: fuzzy boosted product discovery plus highlighted negative review evidence.",
-            [
-                self._result_section("Product discovery with typos", query, product_result),
-                self._result_section("Review evidence snippets", review_query, review_result),
-            ],
-            number_of_requests=product_result["number_of_requests"] + review_result["number_of_requests"],
-            has_custom_ranking=True,
-            backend_complexity="Medium",
-            score=5,
-        )
-
-    def _meili_scenario_1_full_text_keyword_search(self, query: str, limit: int) -> dict[str, Any]:
-        review_query = query
-        product_result = self._meili_product_keyword_search(query, limit)
-        review_result = self._meili_review_evidence_search(review_query, limit)
-        return self._mixed_result(
-            "meilisearch",
-            "Two Meilisearch keyword requests with typo tolerance, filters, and highlights, but less ranking control per field and signal.",
-            [
-                self._result_section("Product discovery with typos", query, product_result),
-                self._result_section("Review evidence snippets", review_query, review_result),
-            ],
-            number_of_requests=product_result["number_of_requests"] + review_result["number_of_requests"],
-            has_custom_ranking=False,
-            backend_complexity="Low",
-            score=3,
-        )
-
-    def _pg_scenario_1_full_text_keyword_search(self, query: str, limit: int) -> dict[str, Any]:
-        review_query = query
-        product_result = self._pg_product_keyword_search(query, limit)
-        review_result = self._pg_review_evidence_search(review_query, limit)
-        return self._mixed_result(
-            "postgres",
-            "Two PostgreSQL FTS queries. Review snippets work with ts_headline, but typo-heavy product discovery is weak without pg_trgm in this scenario.",
-            [
-                self._result_section("Product discovery with typos", query, product_result),
-                self._result_section("Review evidence snippets", review_query, review_result),
-            ],
-            number_of_requests=product_result["number_of_requests"] + review_result["number_of_requests"],
-            has_custom_ranking=False,
-            backend_complexity="Medium",
-            score=2,
-        )
 
     def _es_product_keyword_search(self, query: str, limit: int) -> dict[str, Any]:
         body = {
@@ -963,9 +939,10 @@ class WorkflowService:
 
     def _winner_reason(self, scenario_id: str) -> str:
         reasons = {
-            "scenario-1-full-text-keyword-search": "Elasticsearch combines fuzzy boosted product search with highlighted review evidence and flexible ranking signals.",
-            "scenario-2-semantic-search": "Elasticsearch combines a curated synonym graph with boosted multi_match, so paraphrased intent queries still hit relevant products without an embedding model.",
-            "scenario-3-analytics-aggregation": "Elasticsearch combines full-text review search, rating filters and aggregations in the same engine without app-side fallback.",
+            "scenario-1-product-search": "Elasticsearch ranks fuzzy multi_match across boosted product fields, so typo-heavy queries still surface the right products.",
+            "scenario-2-review-search": "Elasticsearch combines review text match with rating filter, helpful_vote sort, and inline highlights in a single request.",
+            "scenario-3-intent-aware-search": "Elasticsearch combines a curated synonym graph with boosted multi_match, so paraphrased intent queries still hit relevant products without an embedding model.",
+            "scenario-4-analytics-aggregation": "Elasticsearch combines full-text review search, rating filters and aggregations in the same engine without app-side fallback.",
         }
         return reasons[scenario_id]
 
