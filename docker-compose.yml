@@ -58,6 +58,7 @@ services:
       SERVER_HOST: 0.0.0.0
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
       XPACK_SECURITY_ENABLED: "false"
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: "a]3F9g#Kz!mP7vQ2wR8xY0bN5dL1hJ6c"
       TELEMETRY_ENABLED: "false"
     ports:
       - "5601:5601"
