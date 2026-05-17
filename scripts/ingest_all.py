@@ -273,10 +273,7 @@ def ingest_elasticsearch(
     log(f"Elasticsearch products: creating indices reset={reset}")
     create_indices(reset=reset)
     if not skip_embeddings:
-        try:
-            _generate_embeddings(products)
-        except Exception as exc:
-            log(f"WARNING: Vertex AI embedding failed ({exc}), continuing without embeddings")
+        _generate_embeddings(products)
     else:
         log("Skipping Vertex AI embedding generation (--skip-embeddings)")
     client = Elasticsearch(settings.elasticsearch_url, request_timeout=60)
