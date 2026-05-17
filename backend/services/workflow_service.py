@@ -383,7 +383,7 @@ class WorkflowService:
         result = self._engine_result(
             "elasticsearch",
             response,
-            "Hybrid Search: BM25 text matching (synonym-expanded multi_match) combined with Vertex AI KNN vector search using Reciprocal Rank Fusion.",
+            "Hybrid Search: BM25 text matching combined with Vertex AI KNN vector search using Reciprocal Rank Fusion.",
             number_of_requests=1,
             has_aggregation=False,
             has_custom_ranking=True,

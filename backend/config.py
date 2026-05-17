@@ -16,7 +16,6 @@ class Settings:
     data_dir: Path = Path(os.getenv("DATA_DIR", "data"))
     gcp_project_id: str = os.getenv("GCP_PROJECT_ID", "")
     gcp_location: str = os.getenv("GCP_LOCATION", "us-central1")
-    gcp_service_account_json: str | None = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
 
 
 settings = Settings()

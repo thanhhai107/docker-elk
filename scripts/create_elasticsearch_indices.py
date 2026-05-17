@@ -10,22 +10,11 @@ PRODUCT_MAPPING = {
         "number_of_shards": 3,
         "number_of_replicas": 2,
         "analysis": {
-            "filter": {
-                "product_synonyms": {
-                    "type": "synonym_graph",
-                    "synonyms": [
-                        "anc, active noise cancellation, noise cancelling, noise canceling",
-                        "headphone, headphones, headset, earbuds, earphones",
-                        "bluetooth, wireless, cordless",
-                        "cheap, budget, affordable",
-                    ],
-                }
-            },
             "analyzer": {
                 "product_index": {"tokenizer": "standard", "filter": ["lowercase", "asciifolding"]},
                 "product_search": {
                     "tokenizer": "standard",
-                    "filter": ["lowercase", "asciifolding", "product_synonyms"],
+                    "filter": ["lowercase", "asciifolding"],
                 },
             },
         }

@@ -18,9 +18,6 @@ _configured = False
 _model: TextEmbeddingModel | None = None
 
 
-import json
-from google.oauth2 import service_account
-
 def _ensure_configured() -> None:
     global _configured, _model
     if _configured:
@@ -28,19 +25,7 @@ def _ensure_configured() -> None:
     if not settings.gcp_project_id:
         raise RuntimeError("GCP_PROJECT_ID is not set. Vertex AI requires a Project ID.")
     
-    credentials = None
-    if settings.gcp_service_account_json:
-        try:
-            creds_info = json.loads(settings.gcp_service_account_json)
-            credentials = service_account.Credentials.from_service_account_info(creds_info)
-        except Exception as e:
-            raise RuntimeError(f"Failed to parse GCP_SERVICE_ACCOUNT_JSON: {e}")
-            
-    vertexai.init(
-        project=settings.gcp_project_id, 
-        location=settings.gcp_location,
-        credentials=credentials
-    )
+    vertexai.init(project=settings.gcp_project_id, location=settings.gcp_location)
     _model = TextEmbeddingModel.from_pretrained(EMBEDDING_MODEL)
     _configured = True
 
