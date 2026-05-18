@@ -63,13 +63,19 @@ Elasticsearch runs on the master and all worker nodes.
 |   `-- utils/
 |-- frontend/
 |   `-- app.py
-`-- scripts/
-    |-- download_datasets.py
-    |-- init_postgres.sql
-    |-- create_elasticsearch_indices.py
-    |-- create_meilisearch_indexes.py
-    |-- prepare_data.py
-    `-- ingest_all.py
+|-- scripts/
+|   |-- download_datasets.py
+|   |-- init_postgres.sql
+|   |-- create_elasticsearch_indices.py
+|   |-- create_meilisearch_indexes.py
+|   |-- prepare_data.py
+|   `-- ingest_all.py
+`-- terraform/
+    `-- gcp/
+        |-- main.tf
+        |-- terraform.tfvars.example
+        `-- scripts/
+            `-- startup.sh
 ```
 
 ## 1. Start the Cluster Services
@@ -101,7 +107,7 @@ docker compose --env-file .env --env-file /etc/nexus-elastic.env up -d --build p
 If the helper script is available, you can run:
 
 ```bash
-start-amazon-search-demo
+start-demo
 ```
 
 ### Check Elasticsearch cluster health

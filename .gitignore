@@ -12,3 +12,20 @@ data/raw/*.part
 data/products.jsonl
 data/reviews.jsonl
 gcp-key.json
+
+# Terraform local artifacts
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.tfstate.lock.info
+.terraformrc
+terraform.rc
